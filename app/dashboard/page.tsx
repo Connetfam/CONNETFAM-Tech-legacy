@@ -1,404 +1,413 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/app/lib/supabase";
 
-const familyMembers = [
-{
-name: "Mama Grace",
-role: "Great Grandmother",
-year: "1938–2021",
-emoji: "👵🏾",
-story:
-"She welcomed everyone into her home and made her kitchen a gathering place for the whole family.",
-},
-{
-name: "Papa Daniel",
-role: "Grandfather",
-year: "1942–2018",
-emoji: "👴🏿",
-story:
-"He believed every child should know where they came from and loved telling stories about the family.",
-},
-{
-name: "Mama Ada",
-role: "Mother",
-year: "1970–",
-emoji: "👩🏾",
-story:
-"She carried family traditions forward and made sure the next generation knew their history.",
-},
-{
-name: "David",
-role: "Present Generation",
-year: "1999–",
-emoji: "👨🏾",
-story:
-"A new generation carrying the memories, values and stories of those who came before.",
-},
-];
+type Family = {
+id: number;
+name: string;
+description: string | null;
+created_by: string;
+};
 
-const stories = [
+const navigationItems = [
+{ label: "Dashboard", href: "/dashboard", icon: "🏠" },
+{ label: "Family Tree", href: "/dashboard/family", icon: "🌳" },
 {
-title: "The Woman Who Fed Everyone",
-text: "There was always room at Mama Grace's table. Her home became a gathering place for the family.",
-icon: "🍲",
+label: "Family Members",
+href: "/dashboard/family-members",
+icon: "👨‍👩‍👧‍👦",
+},
+{ label: "Stories", href: "/dashboard/stories", icon: "📖" },
+{ label: "Memories", href: "/dashboard/memories", icon: "💝" },
+{ label: "Media", href: "/dashboard/media", icon: "📸" },
+{
+label: "Family Calendar",
+href: "/dashboard/calendar",
+icon: "📅",
 },
 {
-title: "Where Our Family Began",
-text: "Every family has a beginning. This is the story of the people and places that shaped ours.",
-icon: "🌍",
+label: "Voice Messages",
+href: "/dashboard/voice-messages",
+icon: "🎙️",
 },
-{
-title: "The Old Photograph",
-text: "One photograph can hold generations of memories and remind us how quickly time moves.",
-icon: "📷",
-},
+{ label: "Settings", href: "/dashboard/settings", icon: "⚙️" },
 ];
 
 export default function DashboardPage() {
-const [selectedMember, setSelectedMember] = useState(familyMembers[0]);
-const [selectedStory, setSelectedStory] = useState<number | null>(null);
+const router = useRouter();
+
+const [families, setFamilies] = useState<Family[]>([]);
+const [loading, setLoading] = useState(true);
+const [deletingId, setDeletingId] = useState<number | null>(null);
+const [error, setError] = useState("");
+const [notice, setNotice] = useState("");
+const [userEmail, setUserEmail] = useState("");
+
+const loadFamilies = useCallback(async () => {
+setLoading(true);
+setError("");
+
+try {
+const {
+data: { user },
+error: authError,
+} = await supabase.auth.getUser();
+if (authError) throw authError;
+
+if (!user) {
+router.replace("/login");
+return;
+}
+
+setUserEmail(user.email ?? "");
+
+const { data, error: familyError } = await supabase
+.from("families")
+.select("id, name, description, created_by")
+.eq("created_by", user.id)
+.order("id", { ascending: false });
+
+if (familyError) throw familyError;
+
+setFamilies((data ?? []) as Family[]);
+} catch (err) {
+console.error("Dashboard loading error:", err);
+setError(
+err instanceof Error
+? err.message
+: "Unable to load your family spaces. Please try again."
+);
+} finally {
+setLoading(false);
+}
+}, [router]);
+
+useEffect(() => {
+void loadFamilies();
+}, [loadFamilies]);
+
+async function handleDeleteFamily(family: Family) {
+const confirmed = window.confirm(
+`Are you sure you want to delete "${family.name}"?\n\nThis action cannot be undone. Only empty family spaces can be deleted.`
+);
+
+if (!confirmed) return;
+
+setDeletingId(family.id);
+setError("");
+setNotice("");
+
+try {
+const { data, error: rpcError } = await supabase.rpc(
+"delete_empty_family",
+{
+target_family_id: family.id,
+}
+);
+
+if (rpcError) throw rpcError;
+
+const result = data as
+| {
+success?: boolean;
+error?: string;
+message?: string;
+deleted_family_id?: number;
+deleted_family_name?: string;
+}
+| null;
+
+if (!result || result.success !== true) {
+throw new Error(
+result?.error ||
+result?.message ||
+"The database did not confirm that the family space was deleted."
+);
+}
+
+setFamilies((current) =>
+current.filter((item) => item.id !== family.id)
+);
+
+setNotice(`"${family.name}" was deleted successfully.`);
+} catch (err) {
+console.error("Delete family error:", err);
+
+setError(
+err instanceof Error
+? err.message
+: "Unable to delete this family space. Please try again."
+);
+} finally {
+setDeletingId(null);
+}
+}
+
+async function handleSignOut() {
+const { error: signOutError } = await supabase.auth.signOut();
+
+if (signOutError) {
+setError(signOutError.message);
+return;
+}
+
+router.replace("/login");
+}
 
 return (
-<main className="min-h-screen bg-[#f7f4ee] text-[#29251f]">
+<main className="min-h-screen bg-slate-50 text-slate-900">
+<div className="flex min-h-screen">
+<aside className="hidden w-64 shrink-0 border-r border-slate-200 bg-white p-5 md:flex md:flex-col">
+<Link href="/dashboard" className="mb-8">
+<div className="text-2xl font-bold tracking-tight text-emerald-700">
+ConnetFam
+</div>
+<p className="mt-1 text-xs text-slate-500">
+Every family has a story.
+</p>
+</Link>
 
-{/* HEADER */}
-<header className="border-b border-black/10 bg-[#f7f4ee]/90 px-6 py-5 backdrop-blur">
-<div className="mx-auto flex max-w-7xl items-center justify-between">
+<nav className="flex-1 space-y-1">
+{navigationItems.map((item) => {
+const active = item.href === "/dashboard";
+
+return (
+<Link
+key={item.href}
+href={item.href}
+className={`flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition ${
+active
+? "bg-emerald-50 text-emerald-800"
+: "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+}`}
+>
+<span className="text-lg">{item.icon}</span>
+<span>{item.label}</span>
+</Link>
+);
+})}
+</nav>
+
+<button
+onClick={handleSignOut}
+className="mt-6 rounded-xl border border-slate-200 px-4 py-3 text-left text-sm font-medium text-slate-600 hover:bg-slate-50"
+>
+Sign out
+</button>
+</aside>
+
+<section className="min-w-0 flex-1">
+<header className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 bg-white px-5 py-4 sm:px-8">
 <div>
-<h1 className="text-2xl font-bold">Legacy Family</h1>
-<p className="text-xs text-black/50">
-Where every generation belongs.
+<p className="text-sm text-slate-500">Your workspace</p>
+<h1 className="text-xl font-bold sm:text-2xl">
+Family Dashboard
+</h1>
+</div>
+
+<div className="flex items-center gap-3">
+<div className="hidden text-right sm:block">
+<p className="text-sm font-semibold">My Account</p>
+<p className="max-w-48 truncate text-xs text-slate-500">
+{userEmail}
 </p>
 </div>
 
-<button className="rounded-full bg-[#29251f] px-5 py-2 text-sm text-white">
-+ Add Memory
-</button>
+<Link
+href="/dashboard/settings"
+aria-label="Open settings"
+title="Settings"
+className="flex h-11 w-11 items-center justify-center rounded-full border border-slate-200 bg-white text-xl hover:bg-slate-50"
+>
+⚙️
+</Link>
 </div>
 </header>
 
-{/* HERO */}
-<section className="px-6 py-20">
-<div className="mx-auto max-w-7xl">
-
-<p className="text-sm font-semibold uppercase tracking-[0.25em] text-black/40">
-Your family's digital home
+<div className="mx-auto max-w-7xl p-5 sm:p-8">
+<div className="mb-8 rounded-2xl bg-gradient-to-r from-emerald-800 to-teal-700 p-6 text-white sm:p-8">
+<p className="mb-2 text-sm font-medium text-emerald-100">
+Welcome to ConnetFam
 </p>
-
-<h2 className="mt-4 max-w-4xl text-5xl font-bold leading-tight md:text-7xl">
-Your story did not{" "}
-<span className="italic text-black/50">begin with you.</span>
+<h2 className="text-2xl font-bold sm:text-3xl">
+Keep your family connected.
 </h2>
-
-<p className="mt-6 max-w-2xl text-lg leading-8 text-black/60">
-Preserve the people, stories, memories and traditions that
-connect your family from one generation to the next.
+<p className="mt-3 max-w-2xl text-sm leading-6 text-emerald-50 sm:text-base">
+Preserve family stories, celebrate important moments, and
+create a legacy for future generations.
 </p>
 
-<button
-onClick={() =>
-document
-.getElementById("family-tree")
-?.scrollIntoView({ behavior: "smooth" })
-}
-className="mt-8 rounded-full bg-[#29251f] px-7 py-3 text-sm text-white transition hover:-translate-y-1"
+<Link
+href="/dashboard/family"
+className="mt-6 inline-flex rounded-xl bg-white px-5 py-3 text-sm font-semibold text-emerald-800 hover:bg-emerald-50"
 >
-Explore Family Tree
++ Create a Family Space
+</Link>
+</div>
+
+{error && (
+<div
+role="alert"
+className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"
+>
+<p>{error}</p>
+<button
+onClick={() => void loadFamilies()}
+className="font-semibold underline"
+>
+Try again
 </button>
-
-</div>
-</section>
-
-{/* FAMILY MEMBERS */}
-<section className="px-6 pb-20">
-<div className="mx-auto grid max-w-7xl grid-cols-2 gap-4 md:grid-cols-4">
-
-{familyMembers.map((member) => (
-<button
-key={member.name}
-onClick={() => setSelectedMember(member)}
-className={`rounded-3xl border p-6 text-left transition hover:-translate-y-2 ${
-selectedMember.name === member.name
-? "border-black/20 bg-white shadow-xl"
-: "border-black/5 bg-white/50"
-}`}
->
-<div className="mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-[#e9e1d5] text-4xl">
-{member.emoji}
-</div>
-
-<p className="font-semibold">{member.name}</p>
-
-<p className="mt-1 text-xs text-black/45">
-{member.role}
-</p>
-
-<p className="mt-3 text-xs text-black/35">
-{member.year}
-</p>
-</button>
-))}
-
-</div>
-</section>
-
-{/* FAMILY TREE */}
-<section id="family-tree" className="bg-white px-6 py-20">
-<div className="mx-auto max-w-7xl">
-
-<p className="text-sm font-semibold uppercase tracking-[0.2em] text-black/40">
-Generations
-</p>
-
-<h3 className="mt-2 text-4xl font-bold">
-The Family Tree
-</h3>
-
-<p className="mt-4 max-w-2xl text-black/50">
-Every face represents a person. Every person has a story.
-</p>
-
-<div className="mt-10 rounded-[2rem] bg-[#29251f] p-8 text-white md:p-12">
-
-<div className="mx-auto max-w-xs text-center">
-
-<button
-onClick={() => setSelectedMember(familyMembers[0])}
-className="w-full rounded-3xl border border-white/10 bg-white/10 p-7 transition hover:bg-white/20"
->
-<div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-white/10 text-5xl">
-👵🏾
-</div>
-
-<p className="mt-4 font-semibold">
-Mama Grace
-</p>
-
-<p className="text-xs text-white/50">
-Great Grandmother
-</p>
-</button>
-
-</div>
-
-<div className="mx-auto my-6 h-12 w-px bg-white/20" />
-
-<div className="grid gap-4 md:grid-cols-3">
-
-{familyMembers.slice(1).map((member) => (
-<button
-key={member.name}
-onClick={() => setSelectedMember(member)}
-className="rounded-3xl border border-white/10 bg-white/10 p-6 text-center transition hover:-translate-y-2 hover:bg-white/20"
->
-<div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-white/10 text-4xl">
-{member.emoji}
-</div>
-
-<p className="mt-4 font-semibold">
-{member.name}
-</p>
-
-<p className="mt-1 text-xs text-white/50">
-{member.role}
-</p>
-</button>
-))}
-
-</div>
-
-</div>
-
-{/* SELECTED MEMBER */}
-<div className="mt-6 rounded-3xl bg-[#f7f4ee] p-7">
-
-<div className="flex flex-col gap-5 md:flex-row md:items-center">
-
-<div className="flex h-24 w-24 items-center justify-center rounded-full bg-[#e7ded0] text-6xl">
-{selectedMember.emoji}
-</div>
-
-<div>
-<p className="text-xs uppercase tracking-widest text-black/40">
-Family member
-</p>
-
-<h4 className="mt-1 text-2xl font-bold">
-{selectedMember.name}
-</h4>
-
-<p className="text-sm text-black/45">
-{selectedMember.role} · {selectedMember.year}
-</p>
-
-<p className="mt-3 max-w-2xl text-sm leading-6 text-black/60">
-{selectedMember.story}
-</p>
-</div>
-
-</div>
-</div>
-
-</div>
-</section>
-
-{/* STORIES */}
-<section className="px-6 py-20">
-<div className="mx-auto max-w-7xl">
-
-<p className="text-sm font-semibold uppercase tracking-[0.2em] text-black/40">
-Family Stories
-</p>
-
-<h3 className="mt-2 text-4xl font-bold">
-Stories That Made Us
-</h3>
-
-<p className="mt-4 max-w-2xl text-black/50">
-The most important part of a family tree isn't only the names.
-It's the stories behind them.
-</p>
-
-<div className="mt-10 grid gap-6 md:grid-cols-3">
-
-{stories.map((story, index) => (
-<button
-key={story.title}
-onClick={() =>
-setSelectedStory(
-selectedStory === index ? null : index
-)
-}
-className="overflow-hidden rounded-[2rem] border border-black/5 bg-white text-left shadow-sm transition hover:-translate-y-2 hover:shadow-xl"
->
-
-<div className="flex h-52 items-center justify-center bg-[#e9e1d5] text-8xl">
-{story.icon}
-</div>
-
-<div className="p-7">
-
-<h4 className="text-xl font-bold">
-{story.title}
-</h4>
-
-<p className="mt-3 text-sm leading-6 text-black/55">
-{story.text}
-</p>
-
-<p className="mt-6 text-sm font-semibold">
-{selectedStory === index
-? "Close story ↑"
-: "Read story →"}
-</p>
-
-{selectedStory === index && (
-<div className="mt-5 border-t border-black/10 pt-5 text-sm leading-7 text-black/60">
-This space will eventually contain the complete
-family story, photographs, dates and the family
-member connected to the memory.
 </div>
 )}
 
-</div>
-</button>
-))}
-
-</div>
-
-</div>
-</section>
-
-{/* MEMORY WALL */}
-<section className="bg-[#e8e1d6] px-6 py-20">
-<div className="mx-auto max-w-7xl">
-
-<p className="text-sm font-semibold uppercase tracking-[0.2em] text-black/40">
-Memory Wall
-</p>
-
-<h3 className="mt-2 text-4xl font-bold">
-Moments worth keeping.
-</h3>
-
-<div className="mt-10 grid grid-cols-2 gap-4 md:grid-cols-4">
-
-<div className="flex h-64 items-center justify-center rounded-[2rem] bg-[#d2c5b2] text-7xl transition hover:scale-105">
-📷
-</div>
-
-<div className="flex h-64 items-center justify-center rounded-[2rem] bg-[#d9cbb8] text-7xl transition hover:scale-105">
-👨‍👩‍👧‍👦
-</div>
-
-<div className="flex h-64 items-center justify-center rounded-[2rem] bg-[#c8c4b7] text-7xl transition hover:scale-105">
-🏡
-</div>
-
-<div className="flex h-64 items-center justify-center rounded-[2rem] bg-[#d6c6b5] text-7xl transition hover:scale-105">
-❤️
-</div>
-
-</div>
-
-</div>
-</section>
-
-{/* TIMELINE */}
-<section className="px-6 py-20">
-<div className="mx-auto max-w-5xl">
-
-<div className="text-center">
-<p className="text-sm font-semibold uppercase tracking-[0.2em] text-black/40">
-Our Journey
-</p>
-
-<h3 className="mt-2 text-4xl font-bold">
-A Story Across Time
-</h3>
-</div>
-
-<div className="mt-12 space-y-6">
-
-{[
-["1938", "A new generation begins"],
-["1970", "The family grows"],
-["1999", "A new chapter"],
-["2026", "Our story continues"],
-].map(([year, title]) => (
+{notice && (
 <div
-key={year}
-className="rounded-3xl border border-black/5 bg-white p-7 shadow-sm"
+role="status"
+className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800"
 >
-<p className="text-sm font-bold text-black/40">
-{year}
+{notice}
+</div>
+)}
+
+<div className="mb-8 flex flex-wrap items-end justify-between gap-4">
+<div>
+<h2 className="text-xl font-bold">My Family Spaces</h2>
+<p className="mt-1 text-sm text-slate-500">
+Manage the family spaces you created.
+</p>
+</div>
+
+<span className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm ring-1 ring-slate-200">
+{families.length}{" "}
+{families.length === 1 ? "family space" : "family spaces"}
+</span>
+</div>
+
+{loading ? (
+<div className="rounded-2xl border border-slate-200 bg-white p-10 text-center">
+<p className="text-slate-500">Loading your family spaces...</p>
+</div>
+) : families.length === 0 ? (
+<div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-12 text-center">
+<div className="mb-4 text-5xl">🌳</div>
+<h3 className="text-lg font-bold">Your family story starts here</h3>
+<p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">
+Create your first family space to begin preserving your
+family history, memories, and stories.
+</p>
+<Link
+href="/dashboard/family"
+className="mt-6 inline-flex rounded-xl bg-emerald-700 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-800"
+>
+Create your first family space
+</Link>
+</div>
+) : (
+<div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+{families.map((family) => (
+<article
+key={family.id}
+className="flex flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md"
+>
+<div className="mb-4 flex items-start justify-between gap-3">
+<div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-50 text-2xl">
+🌳
+</div>
+
+<button
+type="button"
+onClick={() => void handleDeleteFamily(family)}
+disabled={deletingId !== null}
+className="rounded-lg border border-red-200 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+>
+{deletingId === family.id
+? "Deleting..."
+: "Delete"}
+</button>
+</div>
+
+<h3 className="break-words text-lg font-bold">
+{family.name}
+</h3>
+
+<p className="mt-2 min-h-12 break-words text-sm leading-6 text-slate-500">
+{family.description || "Your family's shared space."}
 </p>
 
-<h4 className="mt-2 text-xl font-bold">
-{title}
-</h4>
+<div className="mt-5 grid grid-cols-2 gap-2">
+<Link
+href={`/dashboard/family?id=${family.id}`}
+className="rounded-xl bg-emerald-700 px-3 py-3 text-center text-sm font-semibold text-white hover:bg-emerald-800"
+>
+Open Family
+</Link>
+
+<Link
+href="/dashboard/family-members"
+className="rounded-xl border border-slate-200 px-3 py-3 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50"
+>
+Members
+</Link>
 </div>
+</article>
 ))}
+</div>
+)}
 
+<div className="mb-4 mt-12">
+<h2 className="text-xl font-bold">Explore Your Workspace</h2>
+<p className="mt-1 text-sm text-slate-500">
+Access the tools that help your family preserve its legacy.
+</p>
 </div>
 
+<div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+{navigationItems
+.filter((item) => item.href !== "/dashboard")
+.map((item) => (
+<Link
+key={item.href}
+href={item.href}
+className="group rounded-2xl border border-slate-200 bg-white p-5 transition hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-md"
+>
+<div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 text-2xl transition group-hover:bg-emerald-50">
+{item.icon}
+</div>
+<h3 className="font-bold">{item.label}</h3>
+<p className="mt-2 text-sm leading-6 text-slate-500">
+{getFeatureDescription(item.label)}
+</p>
+<span className="mt-4 inline-block text-sm font-semibold text-emerald-700">
+Open feature →
+</span>
+</Link>
+))}
+</div>
+
+<footer className="mt-12 border-t border-slate-200 py-6 text-center text-xs text-slate-400">
+ConnetFam · Preserving family stories for generations.
+</footer>
 </div>
 </section>
-
-{/* FOOTER */}
-<footer className="bg-[#29251f] px-6 py-12 text-white">
-<div className="mx-auto max-w-7xl">
-<h4 className="text-xl font-bold">
-Legacy Family
-</h4>
-
-<p className="mt-2 text-sm text-white/40">
-Preserve the past. Connect the present. Inspire the future.
-</p>
 </div>
-</footer>
-
 </main>
 );
+}
+
+function getFeatureDescription(label: string): string {
+const descriptions: Record<string, string> = {
+"Family Tree": "Explore family connections and generations.",
+"Family Members": "Add and manage your family members.",
+Stories: "Preserve the stories that define your family.",
+Memories: "Keep precious moments and family milestones.",
+Media: "Organize family photos and videos.",
+"Family Calendar": "Keep track of family events and important dates.",
+"Voice Messages": "Preserve the voices of the people you love.",
+Settings: "Manage your account and workspace preferences.",
+};
+
+return descriptions[label] ?? "Explore this family feature.";
 }
