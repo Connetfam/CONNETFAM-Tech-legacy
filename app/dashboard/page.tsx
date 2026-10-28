@@ -339,7 +339,7 @@ className="rounded-lg border border-red-200 px-3 py-2 text-xs font-semibold text
 
 <div className="mt-5 grid grid-cols-2 gap-2">
 <Link
-href={`/dashboard/family?id=${family.id}`}
+href={`/dashboard/family-home?id=${family.id}`}
 className="rounded-xl bg-emerald-700 px-3 py-3 text-center text-sm font-semibold text-white hover:bg-emerald-800"
 >
 Open Family
