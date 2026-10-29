@@ -16,23 +16,21 @@ export async function GET(request: NextRequest) {
     }
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseSecretKey = process.env.SUPABASE_SECRET_KEY;
+    const supabaseKey = process.env.SUPABASE_SECRET_KEY;
 
-    if (!supabaseUrl || !supabaseSecretKey) {
+    if (!supabaseUrl || !supabaseKey) {
       console.error("Missing Supabase server environment variables.");
 
       return NextResponse.json(
-        { error: "The invitation service is not configured correctly." },
+        { error: "Server configuration is incomplete." },
         { status: 500 }
       );
     }
 
-    // Server-side client: never expose this secret key in browser code.
-    const supabase = createClient(supabaseUrl, supabaseSecretKey, {
+    const supabase = createClient(supabaseUrl, supabaseKey, {
       auth: {
         persistSession: false,
         autoRefreshToken: false,
-        detectSessionInUrl: false,
       },
     });
 
@@ -47,7 +45,7 @@ export async function GET(request: NextRequest) {
       .maybeSingle();
 
     if (invitationError) {
-      console.error("Invitation validation failed:", invitationError);
+      console.error("Invitation lookup failed:", invitationError);
 
       return NextResponse.json(
         { error: "Could not verify this invitation." },
@@ -71,28 +69,41 @@ export async function GET(request: NextRequest) {
 
     const { data: family, error: familyError } = await supabase
       .from("families")
-      .select("name")
+      .select("id, name")
       .eq("id", invitation.family_id)
       .maybeSingle();
 
-    if (familyError || !family) {
-      console.error("Invitation family lookup failed:", familyError);
+    if (familyError) {
+      console.error("Family lookup failed:", familyError);
 
       return NextResponse.json(
-        { error: "Could not find the family for this invitation." },
+        { error: "Could not load the family." },
+        { status: 500 }
+      );
+    }
+
+    if (!family) {
+      console.error(
+        "Invitation points to a missing family. Family ID:",
+        invitation.family_id
+      );
+
+      return NextResponse.json(
+        { error: "The family linked to this invitation could not be found." },
         { status: 404 }
       );
     }
 
     return NextResponse.json({
       valid: true,
+      familyId: family.id,
       familyName: family.name,
     });
   } catch (error) {
-    console.error("Invitation validation API error:", error);
+    console.error("Invitation validation error:", error);
 
     return NextResponse.json(
-      { error: "Something went wrong while checking the invitation." },
+      { error: "An unexpected error occurred while checking the invitation." },
       { status: 500 }
     );
   }
