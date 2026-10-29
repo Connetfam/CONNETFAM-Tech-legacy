@@ -1,12 +1,20 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { supabase } from "../lib/supabase";
 
-export default function LoginPage() {
-const router = useRouter();
+function LoginForm() {
+const searchParams = useSearchParams();
+const redirectTo = searchParams.get("redirect");
+
+const safeRedirect =
+redirectTo &&
+redirectTo.startsWith("/") &&
+!redirectTo.startsWith("//")
+? redirectTo
+: "/dashboard";
 
 const [email, setEmail] = useState("");
 const [password, setPassword] = useState("");
@@ -15,7 +23,6 @@ const [loading, setLoading] = useState(false);
 
 async function handleLogin(e: React.FormEvent<HTMLFormElement>) {
 e.preventDefault();
-
 setLoading(true);
 setMessage("");
 
@@ -30,10 +37,7 @@ setMessage(error.message);
 return;
 }
 
-setMessage("Login successful! Welcome to Legacy Family.");
-
-router.replace("/dashboard");
-router.refresh();
+window.location.assign(safeRedirect);
 } catch (error) {
 console.error("Login error:", error);
 setMessage("Something went wrong. Please try again.");
@@ -42,6 +46,8 @@ setLoading(false);
 }
 }
 
+const signupUrl = `/signup?redirect=${encodeURIComponent(safeRedirect)}`;
+
 return (
 <main className="flex min-h-screen items-center justify-center bg-[#f7f5ef] px-6 text-[#1f2937]">
 <div className="w-full max-w-md rounded-3xl border border-black/10 bg-white p-8 shadow-sm">
@@ -49,9 +55,7 @@ return (
 CONNETFAM
 </p>
 
-<h1 className="mb-2 text-3xl font-bold">
-Welcome back to Legacy Family
-</h1>
+<h1 className="mb-2 text-3xl font-bold">Welcome back</h1>
 
 <p className="mb-8 text-gray-600">
 Log in to continue preserving your family&apos;s story.
@@ -59,52 +63,35 @@ Log in to continue preserving your family&apos;s story.
 
 <form onSubmit={handleLogin} className="space-y-5">
 <div>
-<label
-htmlFor="email"
-className="mb-2 block font-medium"
->
+<label htmlFor="email" className="mb-2 block font-medium">
 Email
 </label>
-
 <input
 id="email"
 type="email"
 value={email}
 onChange={(e) => setEmail(e.target.value)}
-required
 autoComplete="email"
+required
 className="w-full rounded-xl border border-black/15 px-4 py-3 outline-none focus:border-emerald-700"
 placeholder="you@example.com"
 />
 </div>
 
 <div>
-<label
-htmlFor="password"
-className="mb-2 block font-medium"
->
+<label htmlFor="password" className="mb-2 block font-medium">
 Password
 </label>
-
 <input
 id="password"
 type="password"
 value={password}
 onChange={(e) => setPassword(e.target.value)}
-required
 autoComplete="current-password"
+required
 className="w-full rounded-xl border border-black/15 px-4 py-3 outline-none focus:border-emerald-700"
 placeholder="Your password"
 />
-</div>
-
-<div className="-mt-2 text-right">
-<Link
-href="/forgot-password"
-className="text-sm font-medium text-emerald-700 hover:underline"
->
-Forgot password?
-</Link>
 </div>
 
 <button
@@ -112,24 +99,40 @@ type="submit"
 disabled={loading}
 className="w-full rounded-xl bg-[#17352b] px-4 py-3 font-semibold text-white hover:bg-[#21483b] disabled:cursor-not-allowed disabled:opacity-60"
 >
-{loading ? "Logging in..." : "Log in"}
+{loading ? "Logging in..." : "Log In"}
 </button>
 
 {message && (
-<p
-role="status"
-aria-live="polite"
-className="mt-4 text-center text-sm"
->
+<p role="status" aria-live="polite" className="text-sm text-red-700">
 {message}
 </p>
 )}
 </form>
 
-<p className="mt-6 text-center text-sm text-gray-500">
-Your family&apos;s stories deserve to live on. 🌳
+<p className="mt-6 text-center text-sm text-gray-600">
+Don&apos;t have an account?{" "}
+<Link
+href={signupUrl}
+className="font-semibold text-emerald-700 hover:underline"
+>
+Create an account
+</Link>
 </p>
 </div>
 </main>
+);
+}
+
+export default function LoginPage() {
+return (
+<Suspense
+fallback={
+<main className="flex min-h-screen items-center justify-center bg-[#f7f5ef]">
+<p>Loading login page...</p>
+</main>
+}
+>
+<LoginForm />
+</Suspense>
 );
 }
