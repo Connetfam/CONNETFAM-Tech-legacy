@@ -1,197 +1,289 @@
-import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 import { createHash, randomBytes } from "crypto";
 
 export const runtime = "nodejs";
 
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+
+const publishableKey =
+process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+const secretKey = process.env.SUPABASE_SECRET_KEY!;
+
+const supabaseAdmin = createClient(supabaseUrl, secretKey, {
+auth: {
+autoRefreshToken: false,
+persistSession: false,
+},
+});
+
 export async function POST(request: NextRequest) {
-  try {
-    const authorization = request.headers.get("authorization");
+let createdRelativeId: number | null = null;
 
-    if (!authorization?.startsWith("Bearer ")) {
-      return NextResponse.json(
-        { error: "Please sign in before creating an invitation." },
-        { status: 401 }
-      );
-    }
+try {
+const authorization = request.headers.get("authorization");
 
-    const accessToken = authorization.slice("Bearer ".length);
+if (!authorization?.startsWith("Bearer ")) {
+return NextResponse.json(
+{ error: "Authentication required." },
+{ status: 401 }
+);
+}
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseKey =
-      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+const accessToken = authorization.substring(7);
 
-    if (!supabaseUrl || !supabaseKey) {
-      return NextResponse.json(
-        { error: "Supabase environment variables are missing." },
-        { status: 500 }
-      );
-    }
+const authClient = createClient(
+supabaseUrl,
+publishableKey
+);
 
-    const supabase = createClient(supabaseUrl, supabaseKey, {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-        detectSessionInUrl: false,
-      },
-      global: {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-      },
-    });
+const {
+data: { user },
+error: authError,
+} = await authClient.auth.getUser(accessToken);
 
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser(accessToken);
+if (authError || !user) {
+return NextResponse.json(
+{ error: "Invalid session." },
+{ status: 401 }
+);
+}
 
-    if (authError || !user) {
-      return NextResponse.json(
-        {
-          error:
-            "Your session is invalid or has expired. Please sign in again.",
-        },
-        { status: 401 }
-      );
-    }
+const body = await request.json();
 
-    const body = await request.json();
-    const familyId = Number(body.familyId);
+const familyId = Number(body.familyId);
 
-    const invitedEmail =
-      typeof body.email === "string" && body.email.trim()
-        ? body.email.trim().toLowerCase()
-        : null;
+const fullName =
+typeof body.fullName === "string"
+? body.fullName.trim()
+: "";
 
-    if (!Number.isSafeInteger(familyId) || familyId <= 0) {
-      return NextResponse.json(
-        { error: "A valid family ID is required." },
-        { status: 400 }
-      );
-    }
+const relationship =
+typeof body.relationship === "string"
+? body.relationship.trim()
+: "";
 
-    if (
-      invitedEmail &&
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(invitedEmail)
-    ) {
-      return NextResponse.json(
-        { error: "Please enter a valid email address." },
-        { status: 400 }
-      );
-    }
+const email =
+typeof body.email === "string"
+? body.email.trim()
+: "";
 
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("id")
-      .eq("user_id", user.id)
-      .maybeSingle();
+if (
+!Number.isSafeInteger(familyId) ||
+familyId <= 0
+) {
+return NextResponse.json(
+{ error: "A valid family is required." },
+{ status: 400 }
+);
+}
 
-    if (profileError) {
-      console.error("Invitation profile lookup failed:", profileError);
+if (!fullName || fullName.length > 150) {
+return NextResponse.json(
+{ error: "Please enter a valid full name." },
+{ status: 400 }
+);
+}
 
-      return NextResponse.json(
-        { error: "Could not verify your family profile." },
-        { status: 500 }
-      );
-    }
+if (!relationship || relationship.length > 100) {
+return NextResponse.json(
+{ error: "Please enter their relationship to the family." },
+{ status: 400 }
+);
+}
 
-    if (!profile) {
-      return NextResponse.json(
-        { error: "Your family profile could not be found." },
-        { status: 403 }
-      );
-    }
+if (
+email &&
+!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+) {
+return NextResponse.json(
+{ error: "Please enter a valid email address." },
+{ status: 400 }
+);
+}
 
-    const { data: membership, error: membershipError } = await supabase
-      .from("family_members")
-      .select("family_id")
-      .eq("family_id", familyId)
-      .eq("profile_id", profile.id)
-      .eq("status", "active")
-      .eq("is_active", true)
-      .maybeSingle();
+// Find the current user's profile.
 
-    if (membershipError) {
-      console.error(
-        "Invitation membership lookup failed:",
-        membershipError
-      );
+const { data: profile, error: profileError } =
+await supabaseAdmin
+.from("profiles")
+.select("id")
+.eq("user_id", user.id)
+.maybeSingle();
 
-      return NextResponse.json(
-        { error: "Could not verify your family membership." },
-        { status: 500 }
-      );
-    }
+if (profileError || !profile) {
+return NextResponse.json(
+{ error: "Your profile could not be found." },
+{ status: 404 }
+);
+}
 
-    if (!membership) {
-      return NextResponse.json(
-        {
-          error:
-            "You must be an active member of this family to invite someone.",
-        },
-        { status: 403 }
-      );
-    }
+// Verify active family membership.
 
-    const token = randomBytes(32).toString("hex");
-    const tokenHash = createHash("sha256").update(token).digest("hex");
+const { data: membership, error: membershipError } =
+await supabaseAdmin
+.from("family_members")
+.select("id, role")
+.eq("family_id", familyId)
+.eq("profile_id", profile.id)
+.eq("status", "active")
+.eq("is_active", true)
+.maybeSingle();
 
-    const expiresAt = new Date(
-      Date.now() + 7 * 24 * 60 * 60 * 1000
-    ).toISOString();
+if (membershipError || !membership) {
+return NextResponse.json(
+{ error: "You do not have active access to this family." },
+{ status: 403 }
+);
+}
 
-    const { error: insertError } = await supabase
-      .from("family_invitations")
-      .insert({
-        family_id: familyId,
-        invited_by: user.id,
-        token_hash: tokenHash,
-        invited_email: invitedEmail,
-        status: "pending",
-        expires_at: expiresAt,
-      });
+// Only owners and admins can invite.
 
-    if (insertError) {
-      console.error("Invitation creation failed:", insertError);
+if (!["owner", "admin"].includes(membership.role)) {
+return NextResponse.json(
+{
+error:
+"Only family owners and admins can invite members.",
+},
+{ status: 403 }
+);
+}
 
-      return NextResponse.json(
-        {
-          error:
-            "Could not create the invitation. Please try again.",
-        },
-        { status: 500 }
-      );
-    }
+// Confirm the family exists.
 
-    const siteUrl = process.env.NEXT_PUBLIC_SITE_URL;
+const { data: family, error: familyError } =
+await supabaseAdmin
+.from("families")
+.select("id, name")
+.eq("id", familyId)
+.maybeSingle();
 
-    if (!siteUrl) {
-      return NextResponse.json(
-        { error: "The application URL is not configured." },
-        { status: 500 }
-      );
-    }
+if (familyError || !family) {
+return NextResponse.json(
+{ error: "Family could not be found." },
+{ status: 404 }
+);
+}
 
-    const invitationUrl = new URL(
-      `/join/${token}`,
-      siteUrl
-    ).toString();
+// Create a new family-tree person.
+// Email is optional.
 
-    return NextResponse.json({
-      success: true,
-      invitationUrl,
-      expiresAt,
-    });
-  } catch (error) {
-    console.error("Invitation API error:", error);
+const { data: relative, error: relativeError } =
+await supabaseAdmin
+.from("family_relatives")
+.insert({
+family_id: familyId,
+full_name: fullName,
+relationship,
+email: email || null,
+profile_id: null,
+created_by: user.id,
+})
+.select("id")
+.single();
 
-    return NextResponse.json(
-      {
-        error:
-          "Something went wrong while creating the invitation.",
-      },
-      { status: 500 }
-    );
-  }
+if (relativeError || !relative) {
+console.error(
+"Family relative creation error:",
+relativeError
+);
+
+return NextResponse.json(
+{ error: "Could not add this person to the family tree." },
+{ status: 500 }
+);
+}
+
+createdRelativeId = relative.id;
+
+// Generate a secure invitation token.
+
+const token = randomBytes(32).toString("hex");
+
+const tokenHash = createHash("sha256")
+.update(token)
+.digest("hex");
+
+const expiresAt = new Date(
+Date.now() + 7 * 24 * 60 * 60 * 1000
+).toISOString();
+
+// Create invitation linked to the new family-tree person.
+
+const { error: invitationError } =
+await supabaseAdmin
+.from("family_invitations")
+.insert({
+family_id: familyId,
+relative_id: relative.id,
+invited_by: user.id,
+token_hash: tokenHash,
+invited_email: email || null,
+status: "pending",
+expires_at: expiresAt,
+});
+
+if (invitationError) {
+console.error(
+"Invitation creation error:",
+invitationError
+);
+
+// Clean up the new family-tree person if
+// the invitation could not be created.
+
+await supabaseAdmin
+.from("family_relatives")
+.delete()
+.eq("id", relative.id)
+.eq("family_id", familyId);
+
+createdRelativeId = null;
+
+return NextResponse.json(
+{ error: "Could not create the invitation." },
+{ status: 500 }
+);
+}
+
+const baseUrl =
+process.env.NEXT_PUBLIC_SITE_URL ||
+process.env.NEXT_PUBLIC_APP_URL ||
+request.nextUrl.origin;
+
+const invitationLink =
+`${baseUrl.replace(/\/$/, "")}/join/${token}`;
+
+return NextResponse.json({
+success: true,
+invitationType: "new_relative",
+invitationLink,
+relativeId: relative.id,
+relativeName: fullName,
+familyName: family.name,
+expiresAt,
+});
+} catch (error) {
+console.error("Invitation API error:", error);
+
+// Best-effort cleanup if an unexpected error
+// happens after creating the family-tree person.
+
+if (createdRelativeId !== null) {
+await supabaseAdmin
+.from("family_relatives")
+.delete()
+.eq("id", createdRelativeId);
+}
+
+return NextResponse.json(
+{
+error:
+"Something went wrong while creating the invitation.",
+},
+{ status: 500 }
+);
+}
 }

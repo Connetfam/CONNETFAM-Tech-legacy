@@ -3,612 +3,1105 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+
+import {
+ArrowLeft,
+ArrowRight,
+BookOpen,
+CalendarDays,
+Camera,
+Heart,
+Loader2,
+MessageCircle,
+Mic,
+TreeDeciduous,
+Users,
+Video,
+Sparkles,
+Copy,
+Check,
+Mail,
+UserPlus,
+ShieldCheck,
+Share2,
+} from "lucide-react";
+
 import { supabase } from "@/app/lib/supabase";
 
 type Family = {
-  id: number;
-  name: string;
-  description: string | null;
-  created_by: string;
+id: number;
+name: string;
+description?: string | null;
+created_by?: string;
+};
+
+type FamilyMember = {
+id: number;
+profile_id: number;
+role: string;
+status: string;
+is_active: boolean;
 };
 
 type FamilyRelative = {
-  id: number;
-  family_id: number;
-  full_name: string;
-  relationship: string | null;
-  email: string | null;
-  phone: string | null;
-  notes: string | null;
+id: number;
+family_id: number;
+full_name: string;
+relationship: string | null;
+email: string | null;
+profile_id: number | null;
 };
 
-type ProfileUser = {
-  email?: string;
-  user_metadata?: {
-    avatar_url?: string;
-    full_name?: string;
-    name?: string;
-  };
-};
+type Section = "overview" | "space" | "heritage";
+
+const familySpaceFeatures = [
+{
+title: "Family Members",
+description: "Meet the people who make up your family.",
+icon: Users,
+path: "/dashboard/family-members",
+},
+{
+title: "Family Tree",
+description: "Explore family relationships and generations.",
+icon: TreeDeciduous,
+path: "/dashboard/family-tree",
+},
+];
+
+const heritageFeatures = [
+{
+title: "Stories",
+description: "Preserve the stories that define your family.",
+icon: BookOpen,
+path: "/dashboard/stories",
+available: true,
+},
+{
+title: "Memories",
+description: "Keep special family moments alive.",
+icon: Heart,
+path: "/dashboard/memories",
+available: true,
+},
+{
+title: "Photos & Videos",
+description: "Keep family photographs and videos together.",
+icon: Camera,
+path: "/dashboard/media",
+available: true,
+},
+{
+title: "Voice Notes",
+description: "Preserve the voices of the people you love.",
+icon: Mic,
+path: "/dashboard/voice-messages",
+available: true,
+},
+{
+title: "Text Messages",
+description: "Keep meaningful family messages and conversations.",
+icon: MessageCircle,
+path: "",
+available: false,
+},
+{
+title: "Video Messages",
+description: "Save personal video messages from family members.",
+icon: Video,
+path: "",
+available: false,
+},
+{
+title: "Calendar & Events",
+description: "Remember birthdays, gatherings and important dates.",
+icon: CalendarDays,
+path: "/dashboard/calendar",
+available: true,
+},
+];
 
 export default function FamilyHomePage() {
-  const router = useRouter();
+const router = useRouter();
 
-  const [familyId, setFamilyId] = useState<number | null>(null);
-  const [family, setFamily] = useState<Family | null>(null);
-  const [relatives, setRelatives] = useState<FamilyRelative[]>([]);
-  const [user, setUser] = useState<ProfileUser | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+const [family, setFamily] = useState<Family | null>(null);
+const [members, setMembers] = useState<FamilyMember[]>([]);
+const [relatives, setRelatives] = useState<FamilyRelative[]>([]);
 
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviting, setInviting] = useState(false);
-  const [inviteLink, setInviteLink] = useState("");
-  const [inviteMessage, setInviteMessage] = useState("");
+const [userRole, setUserRole] = useState("");
 
-  const loadFamily = useCallback(
-    async (id: number) => {
-      setLoading(true);
-      setError("");
+const [loading, setLoading] = useState(true);
+const [error, setError] = useState("");
 
-      try {
-        const {
-          data: { user: currentUser },
-          error: authError,
-        } = await supabase.auth.getUser();
+const [activeSection, setActiveSection] =
+useState<Section>("overview");
 
-        if (authError) throw authError;
+const [emailByRelative, setEmailByRelative] = useState<
+Record<number, string>
+>({});
 
-        if (!currentUser) {
-          router.replace("/login");
-          return;
-        }
+const [invitingId, setInvitingId] = useState<number | null>(null);
 
-        setUser({
-          email: currentUser.email ?? undefined,
-          user_metadata: currentUser.user_metadata,
-        });
+const [invitationLinks, setInvitationLinks] = useState<
+Record<number, string>
+>({});
 
-        const { data: familyData, error: familyError } = await supabase
-          .from("families")
-          .select("id, name, description, created_by")
-          .eq("id", id)
-          .maybeSingle();
+const [messages, setMessages] = useState<
+Record<number, string>
+>({});
 
-        if (familyError) throw familyError;
+const [copiedId, setCopiedId] = useState<number | null>(null);
 
-        if (!familyData) {
-          throw new Error(
-            "This family could not be found, or you do not have permission to view it."
-          );
-        }
+const [globalMessage, setGlobalMessage] = useState("");
 
-        setFamily(familyData as Family);
+const [globalMessageIsError, setGlobalMessageIsError] =
+useState(false);
 
-        const { data: relativeData, error: relativesError } =
-          await supabase
-            .from("family_relatives")
-            .select(
-              "id, family_id, full_name, relationship, email, phone, notes"
-            )
-            .eq("family_id", id)
-            .order("created_at", { ascending: true });
+const canInvite =
+userRole === "owner" || userRole === "admin";
 
-        if (relativesError) throw relativesError;
+const loadFamily = useCallback(async () => {
+setLoading(true);
+setError("");
 
-        setRelatives((relativeData ?? []) as FamilyRelative[]);
-      } catch (err) {
-        console.error("Family Home loading error:", err);
+try {
+const {
+data: { user },
+error: authError,
+} = await supabase.auth.getUser();
 
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Unable to load this family. Please try again."
-        );
-      } finally {
-        setLoading(false);
-      }
-    },
-    [router]
-  );
+if (authError) throw authError;
 
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const idFromUrl = params.get("id");
-
-    if (!idFromUrl) {
-      setLoading(false);
-      setError(
-        "No family was selected. Return to your dashboard and open a family."
-      );
-      return;
-    }
-
-    const parsedId = Number(idFromUrl);
-
-    if (!Number.isSafeInteger(parsedId) || parsedId <= 0) {
-      setLoading(false);
-      setError("The family link is invalid. Please select a family again.");
-      return;
-    }
-
-    setFamilyId(parsedId);
-    void loadFamily(parsedId);
-  }, [loadFamily]);
-
-  async function handleInvite() {
-    if (!familyId) {
-      setInviteMessage("Please open a family first.");
-      return;
-    }
-
-    setInviting(true);
-    setInviteMessage("");
-    setInviteLink("");
-
-    try {
-      const {
-        data: { session },
-        error: sessionError,
-      } = await supabase.auth.getSession();
-
-      if (sessionError) throw sessionError;
-
-      if (!session?.access_token) {
-        throw new Error("Please sign in again.");
-      }
-
-      const response = await fetch("/api/family-invitations", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          familyId,
-          email: inviteEmail.trim() || undefined,
-        }),
-      });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          result.error || "Could not create the invitation."
-        );
-      }
-
-      setInviteLink(result.invitationUrl);
-      setInviteMessage(
-        "Invitation link created. Copy and share it with your relative."
-      );
-    } catch (err) {
-      setInviteMessage(
-        err instanceof Error
-          ? err.message
-          : "Something went wrong. Please try again."
-      );
-    } finally {
-      setInviting(false);
-    }
-  }
-
-  async function copyInvitationLink() {
-    if (!inviteLink) return;
-
-    try {
-      await navigator.clipboard.writeText(inviteLink);
-      setInviteMessage(
-        "Invitation link copied. You can now share it with your relative."
-      );
-    } catch {
-      setInviteMessage(
-        "Automatic copying failed. Select and copy the invitation link above."
-      );
-    }
-  }
-
-  const avatarUrl = user?.user_metadata?.avatar_url;
-
-  const displayName =
-    user?.user_metadata?.full_name ||
-    user?.user_metadata?.name ||
-    user?.email?.split("@")[0] ||
-    "My Account";
-
-  if (loading) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-[#f7f5ef] p-6">
-        <div className="text-center">
-          <div className="mb-4 text-5xl">🌳</div>
-          <p className="text-gray-600">Opening your family home...</p>
-        </div>
-      </main>
-    );
-  }
-
-  if (error || !family) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-[#f7f5ef] p-6">
-        <div className="w-full max-w-lg rounded-3xl border border-black/10 bg-white p-8 text-center shadow-sm">
-          <div className="mb-4 text-5xl">🏡</div>
-
-          <h1 className="text-2xl font-bold">Family Home</h1>
-
-          <p className="mt-3 break-words text-sm leading-6 text-gray-600">
-            {error || "We could not load this family."}
-          </p>
-
-          <Link
-            href="/dashboard"
-            className="mt-6 inline-flex rounded-full bg-[#17352b] px-6 py-3 text-sm font-semibold text-white hover:bg-[#21483b]"
-          >
-            Return to dashboard
-          </Link>
-        </div>
-      </main>
-    );
-  }
-
-  return (
-    <main className="min-h-screen bg-[#f7f5ef] text-[#1f2937]">
-      <header className="border-b border-black/10 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
-          <Link href="/dashboard" className="shrink-0">
-            <span className="block text-xl font-bold tracking-tight text-emerald-800">
-              ConnetFam
-            </span>
-            <span className="hidden text-sm text-gray-500 sm:block">
-              Every family has a story.
-            </span>
-          </Link>
-
-          <div className="flex items-center gap-3">
-            <div className="hidden text-right sm:block">
-              <p className="text-sm font-semibold">{displayName}</p>
-              <p className="max-w-48 truncate text-xs text-gray-500">
-                {user?.email}
-              </p>
-            </div>
-
-            <Link
-              href="/dashboard/settings"
-              aria-label="Open profile and settings"
-              title="Profile and settings"
-              className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-full border border-black/10 bg-emerald-50 text-xl"
-            >
-              {avatarUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={avatarUrl}
-                  alt="Your profile"
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                "👤"
-              )}
-            </Link>
-          </div>
-        </div>
-      </header>
-
-      <div className="mx-auto max-w-7xl px-5 py-8 sm:px-8">
-        <nav className="mb-6 flex flex-wrap items-center gap-2 text-sm text-gray-500">
-          <Link href="/dashboard" className="hover:text-emerald-800">
-            My Dashboard
-          </Link>
-          <span>/</span>
-          <span className="font-medium text-gray-800">{family.name}</span>
-        </nav>
-
-        <section className="overflow-hidden rounded-3xl bg-gradient-to-br from-[#17352b] via-emerald-800 to-teal-700 p-6 text-white sm:p-10">
-          <div className="flex flex-col justify-between gap-6 md:flex-row md:items-center">
-            <div className="max-w-2xl">
-              <p className="text-sm font-medium uppercase tracking-[0.2em] text-emerald-100">
-                Your family home
-              </p>
-
-              <h1 className="mt-3 break-words text-3xl font-bold sm:text-4xl">
-                {family.name}
-              </h1>
-
-              <p className="mt-4 whitespace-pre-wrap text-sm leading-7 text-emerald-50 sm:text-base">
-                {family.description ||
-                  "A shared home for your family stories, memories, and connections."}
-              </p>
-
-              <div className="mt-6 flex flex-wrap gap-3">
-                <Link
-                  href={`/dashboard/family-members?family_id=${family.id}`}
-                  className="rounded-full bg-white px-5 py-3 text-sm font-semibold text-emerald-900 transition hover:bg-emerald-50"
-                >
-                  + Manage Family Members
-                </Link>
-
-                <Link
-                  href={`/dashboard/family?id=${family.id}`}
-                  className="rounded-full border border-white/40 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
-                >
-                  Open Family Tree
-                </Link>
-              </div>
-            </div>
-
-            <div className="flex h-28 w-28 shrink-0 items-center justify-center self-start rounded-3xl border border-white/20 bg-white/10 text-6xl md:self-center">
-              🌳
-            </div>
-          </div>
-        </section>
-
-        <section className="mt-8 grid gap-4 sm:grid-cols-2">
-          <div className="rounded-2xl border border-black/5 bg-white p-6 shadow-sm">
-            <p className="text-sm text-gray-500">Family members added</p>
-            <p className="mt-2 text-3xl font-bold text-emerald-800">
-              {relatives.length}
-            </p>
-            <p className="mt-2 text-sm text-gray-500">
-              Relatives recorded in this family space.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-black/5 bg-white p-6 shadow-sm">
-            <p className="text-sm text-gray-500">Family space</p>
-            <p className="mt-2 text-xl font-bold">{family.name}</p>
-            <p className="mt-2 text-sm text-gray-500">
-              Your dedicated place to preserve family history.
-            </p>
-          </div>
-        </section>
-
-        {/* Invite family */}
-        <section className="mt-8 rounded-3xl border border-black/5 bg-white p-6 shadow-sm sm:p-8">
-          <h2 className="text-2xl font-bold">Invite Your Family</h2>
-
-          <p className="mt-2 text-sm leading-6 text-gray-500">
-            Create a link to share with a relative so they can join your family
-            space.
-          </p>
-
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              void handleInvite();
-            }}
-            className="mt-5 flex flex-col gap-3 sm:flex-row"
-          >
-            <input
-              type="email"
-              value={inviteEmail}
-              onChange={(event) => setInviteEmail(event.target.value)}
-              placeholder="Relative's email (optional)"
-              aria-label="Relative's email address"
-              className="min-w-0 flex-1 rounded-xl border border-gray-200 px-4 py-3 outline-none focus:border-emerald-600"
-            />
-
-            <button
-              type="submit"
-              disabled={inviting}
-              className="rounded-xl bg-emerald-800 px-6 py-3 font-semibold text-white hover:bg-emerald-900 disabled:opacity-50"
-            >
-              {inviting ? "Creating link..." : "Generate Invite Link"}
-            </button>
-          </form>
-
-          {inviteMessage && (
-            <p
-              role="status"
-              className="mt-4 break-words text-sm text-gray-600"
-            >
-              {inviteMessage}
-            </p>
-          )}
-
-          {inviteLink && (
-            <div className="mt-4 rounded-xl bg-emerald-50 p-4">
-              <label
-                htmlFor="invitation-link"
-                className="mb-2 block text-sm font-semibold text-emerald-900"
-              >
-                Your invitation link
-              </label>
-
-              <input
-                id="invitation-link"
-                readOnly
-                value={inviteLink}
-                onFocus={(event) => event.currentTarget.select()}
-                className="w-full rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm text-gray-700"
-              />
-
-              <button
-                type="button"
-                onClick={() => void copyInvitationLink()}
-                className="mt-3 rounded-lg bg-emerald-800 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-900"
-              >
-                Copy Invitation Link
-              </button>
-
-              <p className="mt-3 text-xs leading-5 text-gray-500">
-                This link is intended to expire after seven days. The recipient
-                must open it on the deployed website.
-              </p>
-            </div>
-          )}
-        </section>
-
-        {/* Family members */}
-        <section className="mt-10">
-          <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h2 className="text-2xl font-bold">Our Family</h2>
-              <p className="mt-2 text-sm text-gray-500">
-                The relatives recorded in this family space.
-              </p>
-            </div>
-
-            <Link
-              href={`/dashboard/family-members?family_id=${family.id}`}
-              className="text-sm font-semibold text-emerald-800 hover:underline"
-            >
-              Manage members →
-            </Link>
-          </div>
-
-          {relatives.length === 0 ? (
-            <div className="rounded-3xl border border-dashed border-gray-300 bg-white px-6 py-12 text-center">
-              <div className="mb-4 text-5xl">👨‍👩‍👧‍👦</div>
-
-              <h3 className="text-lg font-bold">
-                Your family tree starts here
-              </h3>
-
-              <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-gray-500">
-                Add your parents, siblings, children, grandparents, and other
-                relatives to begin building your family history.
-              </p>
-
-              <Link
-                href={`/dashboard/family-members?family_id=${family.id}`}
-                className="mt-6 inline-flex rounded-full bg-[#17352b] px-6 py-3 text-sm font-semibold text-white hover:bg-[#21483b]"
-              >
-                Add your first relative
-              </Link>
-            </div>
-          ) : (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {relatives.map((relative) => (
-                <article
-                  key={relative.id}
-                  className="rounded-2xl border border-black/5 bg-white p-5 shadow-sm transition hover:shadow-md"
-                >
-                  <div className="flex items-start gap-4">
-                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-2xl">
-                      👤
-                    </div>
-
-                    <div className="min-w-0">
-                      <h3 className="break-words font-bold">
-                        {relative.full_name}
-                      </h3>
-                      <p className="mt-1 text-sm text-emerald-800">
-                        {relative.relationship || "Family member"}
-                      </p>
-                    </div>
-                  </div>
-
-                  {relative.email && (
-                    <p className="mt-4 break-all text-sm text-gray-500">
-                      ✉️ {relative.email}
-                    </p>
-                  )}
-
-                  {relative.phone && (
-                    <p className="mt-2 break-words text-sm text-gray-500">
-                      📞 {relative.phone}
-                    </p>
-                  )}
-
-                  {relative.notes && (
-                    <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-gray-600">
-                      {relative.notes}
-                    </p>
-                  )}
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
-
-        {/* Family features */}
-        <section className="mt-12">
-          <h2 className="text-2xl font-bold">
-            Keep Your Family Connected
-          </h2>
-
-          <p className="mt-2 text-sm text-gray-500">
-            Preserve the moments, voices, and stories that matter.
-          </p>
-
-          <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <FeatureCard
-              icon="📖"
-              title="Family Stories"
-              description="Record the stories and wisdom passed between generations."
-              href="/dashboard/stories"
-            />
-
-            <FeatureCard
-              icon="💝"
-              title="Memories"
-              description="Keep important family moments and milestones."
-              href="/dashboard/memories"
-            />
-
-            <FeatureCard
-              icon="📸"
-              title="Family Photos"
-              description="Keep your family's photographs and media together."
-              href="/dashboard/media"
-            />
-
-            <FeatureCard
-              icon="📅"
-              title="Family Calendar"
-              description="Keep track of birthdays, reunions, and recurring events."
-              href="/dashboard/calendar"
-            />
-
-            <FeatureCard
-              icon="🎙️"
-              title="Voice Messages"
-              description="Preserve the voices and messages of loved ones."
-              href="/dashboard/voice-messages"
-            />
-
-            <FeatureCard
-              icon="⚙️"
-              title="Family Settings"
-              description="Manage your account and profile preferences."
-              href="/dashboard/settings"
-            />
-          </div>
-        </section>
-
-        <footer className="mt-12 border-t border-black/10 py-6 text-center text-xs text-gray-400">
-          ConnetFam · Every family has a story.
-        </footer>
-      </div>
-    </main>
-  );
+if (!user) {
+router.replace("/login");
+return;
 }
 
-function FeatureCard({
-  icon,
-  title,
-  description,
-  href,
-}: {
-  icon: string;
-  title: string;
-  description: string;
-  href: string;
-}) {
-  return (
-    <Link
-      href={href}
-      className="group rounded-2xl border border-black/5 bg-white p-5 transition hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-md"
-    >
-      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-50 text-2xl">
-        {icon}
-      </div>
+const params = new URLSearchParams(window.location.search);
 
-      <h3 className="font-bold group-hover:text-emerald-800">{title}</h3>
+const familyIdValue =
+params.get("id") || params.get("family_id");
 
-      <p className="mt-2 text-sm leading-6 text-gray-500">{description}</p>
+const selectedFamilyId = Number(familyIdValue);
 
-      <span className="mt-4 inline-block text-sm font-semibold text-emerald-800">
-        Explore →
-      </span>
-    </Link>
-  );
+const requestedSection = params.get("section");
+
+if (
+requestedSection === "space" ||
+requestedSection === "heritage"
+) {
+setActiveSection(requestedSection);
+} else {
+setActiveSection("overview");
+}
+
+if (
+!familyIdValue ||
+!Number.isSafeInteger(selectedFamilyId) ||
+selectedFamilyId <= 0
+) {
+throw new Error(
+"No family was selected. Please return to your dashboard and open a family."
+);
+}
+
+const { data: profile, error: profileError } =
+await supabase
+.from("profiles")
+.select("id")
+.eq("user_id", user.id)
+.single();
+
+if (profileError) throw profileError;
+
+if (!profile) {
+throw new Error("Your profile could not be found.");
+}
+
+const { data: membership, error: membershipError } =
+await supabase
+.from("family_members")
+.select("id, role")
+.eq("family_id", selectedFamilyId)
+.eq("profile_id", profile.id)
+.eq("status", "active")
+.eq("is_active", true)
+.maybeSingle();
+
+if (membershipError) throw membershipError;
+
+if (!membership) {
+throw new Error(
+"You do not have active access to this family workspace."
+);
+}
+
+setUserRole(membership.role || "");
+
+const { data: familyData, error: familyError } =
+await supabase
+.from("families")
+.select("id, name, description, created_by")
+.eq("id", selectedFamilyId)
+.single();
+
+if (familyError) throw familyError;
+
+setFamily(familyData as Family);
+
+const { data: memberData, error: membersError } =
+await supabase
+.from("family_members")
+.select("id, profile_id, role, status, is_active")
+.eq("family_id", selectedFamilyId)
+.eq("status", "active")
+.eq("is_active", true);
+
+if (membersError) throw membersError;
+
+setMembers((memberData || []) as FamilyMember[]);
+
+const { data: relativesData, error: relativesError } =
+await supabase
+.from("family_relatives")
+.select(
+"id, family_id, full_name, relationship, email, profile_id"
+)
+.eq("family_id", selectedFamilyId)
+.order("full_name", { ascending: true });
+
+if (relativesError) throw relativesError;
+
+const loadedRelatives = (relativesData ||
+[]) as FamilyRelative[];
+
+setRelatives(loadedRelatives);
+
+const savedEmails: Record<number, string> = {};
+
+loadedRelatives.forEach((relative) => {
+savedEmails[relative.id] = relative.email || "";
+});
+
+setEmailByRelative(savedEmails);
+} catch (err) {
+console.error("FAMILY HOME ERROR:", err);
+
+setError(
+err instanceof Error
+? err.message
+: "Unable to load this family workspace."
+);
+} finally {
+setLoading(false);
+}
+}, [router]);
+
+useEffect(() => {
+void loadFamily();
+}, [loadFamily]);
+
+function changeSection(section: Section) {
+setActiveSection(section);
+
+if (!family) return;
+
+const params = new URLSearchParams();
+
+params.set("id", String(family.id));
+
+if (section !== "overview") {
+params.set("section", section);
+}
+
+router.replace(
+`/dashboard/family-home?${params.toString()}`
+);
+}
+
+function updateRelativeEmail(
+relativeId: number,
+value: string
+) {
+setEmailByRelative((previous) => ({
+...previous,
+[relativeId]: value,
+}));
+
+setInvitationLinks((previous) => ({
+...previous,
+[relativeId]: "",
+}));
+
+setMessages((previous) => ({
+...previous,
+[relativeId]: "",
+}));
+}
+
+async function sendInvitation(relative: FamilyRelative) {
+if (!family) {
+setGlobalMessage("No family was found.");
+setGlobalMessageIsError(true);
+return;
+}
+
+if (!canInvite) {
+setGlobalMessage(
+"Only family owners and admins can invite members."
+);
+setGlobalMessageIsError(true);
+return;
+}
+
+if (relative.profile_id) {
+setMessages((previous) => ({
+...previous,
+[relative.id]: "This person already has a connected account.",
+}));
+return;
+}
+
+const email =
+emailByRelative[relative.id]?.trim() || "";
+
+if (
+email &&
+!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+) {
+setMessages((previous) => ({
+...previous,
+[relative.id]: "Please enter a valid email address or leave it empty.",
+}));
+return;
+}
+
+setInvitingId(relative.id);
+
+setMessages((previous) => ({
+...previous,
+[relative.id]: "",
+}));
+
+setInvitationLinks((previous) => ({
+...previous,
+[relative.id]: "",
+}));
+
+try {
+const {
+data: { session },
+error: sessionError,
+} = await supabase.auth.getSession();
+
+if (sessionError || !session) {
+router.replace("/login");
+return;
+}
+
+const response = await fetch(
+"/api/family-invitations",
+{
+method: "POST",
+headers: {
+"Content-Type": "application/json",
+Authorization: `Bearer ${session.access_token}`,
+},
+body: JSON.stringify({
+familyId: family.id,
+relativeId: relative.id,
+email: email || null,
+}),
+}
+);
+
+const result = await response.json();
+
+if (!response.ok || !result.success) {
+throw new Error(
+result.error ||
+"Invitation could not be created."
+);
+}
+
+if (!result.invitationLink) {
+throw new Error(
+"The invitation was created, but no link was returned."
+);
+}
+
+setInvitationLinks((previous) => ({
+...previous,
+[relative.id]: result.invitationLink,
+}));
+
+setMessages((previous) => ({
+...previous,
+[relative.id]: `Invitation for ${relative.full_name} created successfully.`,
+}));
+} catch (err) {
+console.error("INVITATION ERROR:", err);
+
+setMessages((previous) => ({
+...previous,
+[relative.id]:
+err instanceof Error
+? err.message
+: "Unable to create the invitation.",
+}));
+} finally {
+setInvitingId(null);
+}
+}
+
+async function copyInvitationLink(relativeId: number) {
+const link = invitationLinks[relativeId];
+
+if (!link) return;
+
+try {
+await navigator.clipboard.writeText(link);
+
+setCopiedId(relativeId);
+
+setMessages((previous) => ({
+...previous,
+[relativeId]: "Invitation link copied successfully.",
+}));
+
+window.setTimeout(() => {
+setCopiedId((current) =>
+current === relativeId ? null : current
+);
+}, 2500);
+} catch {
+setMessages((previous) => ({
+...previous,
+[relativeId]:
+"Copying failed. Please select the link and copy it manually.",
+}));
+}
+}
+
+async function shareInvitationLink(relative: FamilyRelative) {
+const link = invitationLinks[relative.id];
+
+if (!link || !family) return;
+
+try {
+if (navigator.share) {
+await navigator.share({
+title: "Join my family on Legacy Family",
+text: `You have been invited to join ${family.name} on Legacy Family.`,
+url: link,
+});
+} else {
+await copyInvitationLink(relative.id);
+}
+} catch (err) {
+if (
+err instanceof Error &&
+err.name === "AbortError"
+) {
+return;
+}
+
+setMessages((previous) => ({
+...previous,
+[relative.id]: "Unable to share the invitation link.",
+}));
+}
+}
+
+if (loading) {
+return (
+<main className="flex min-h-screen items-center justify-center bg-[#f7f5ef] p-8">
+<div className="flex items-center gap-3 rounded-2xl bg-white p-8 text-sm text-gray-600 shadow-sm">
+<Loader2
+className="animate-spin text-emerald-800"
+size={20}
+/>
+Loading your family workspace...
+</div>
+</main>
+);
+}
+
+if (error || !family) {
+return (
+<main className="min-h-screen bg-[#f7f5ef] p-8">
+<div className="mx-auto max-w-3xl rounded-2xl border border-red-200 bg-red-50 p-6 text-red-700">
+<h1 className="text-xl font-bold">
+Family workspace unavailable
+</h1>
+
+<p className="mt-3">
+{error ||
+"The selected family could not be found."}
+</p>
+
+<Link
+href="/dashboard"
+className="mt-6 inline-block rounded-full bg-[#17352b] px-6 py-3 text-white"
+>
+Return to Dashboard
+</Link>
+</div>
+</main>
+);
+}
+
+const unlinkedRelatives = relatives.filter(
+(relative) => !relative.profile_id
+);
+
+return (
+<main className="min-h-screen bg-[#f7f5ef] px-5 py-8 text-slate-800 sm:px-8">
+<div className="mx-auto max-w-6xl">
+
+{/* Navigation */}
+
+<div className="flex flex-wrap items-center justify-between gap-4">
+<Link
+href="/dashboard"
+className="inline-flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-emerald-800"
+>
+<ArrowLeft size={17} />
+Back to Dashboard
+</Link>
+
+<span className="text-xs font-semibold tracking-widest text-emerald-800">
+LEGACY · CONNETFAM
+</span>
+</div>
+
+{/* Family Header */}
+
+<header className="mt-7 overflow-hidden rounded-3xl bg-gradient-to-br from-[#17352b] to-[#28614c] p-8 text-white shadow-sm sm:p-10">
+<div className="flex items-center gap-2 text-sm text-emerald-200">
+<Sparkles size={16} />
+Your family's private home
+</div>
+
+<h1 className="mt-4 text-3xl font-bold sm:text-4xl">
+{family.name}
+</h1>
+
+<p className="mt-3 max-w-2xl text-sm leading-7 text-emerald-100">
+{family.description ||
+"A shared home for your family's people, stories and memories across generations."}
+</p>
+
+<div className="mt-7 flex flex-wrap gap-3">
+<span className="rounded-full bg-white/10 px-4 py-2 text-sm">
+<Users
+className="mr-2 inline"
+size={15}
+/>
+{members.length} active members
+</span>
+
+<span className="rounded-full bg-white/10 px-4 py-2 text-sm">
+Family workspace #{family.id}
+</span>
+</div>
+</header>
+
+{/* Section Navigation */}
+
+<nav className="mt-7 grid grid-cols-3 gap-2 rounded-2xl border border-black/5 bg-white p-2 shadow-sm">
+{(
+[
+["overview", "Overview"],
+["space", "Family Space"],
+["heritage", "Family Heritage"],
+] as [Section, string][]
+).map(([section, label]) => (
+<button
+key={section}
+type="button"
+onClick={() => changeSection(section)}
+className={`rounded-xl px-3 py-3 text-sm font-semibold transition ${
+activeSection === section
+? "bg-[#17352b] text-white"
+: "text-gray-600 hover:bg-gray-100"
+}`}
+>
+{label}
+</button>
+))}
+</nav>
+
+{/* Overview */}
+
+{activeSection === "overview" && (
+<section className="mt-9">
+<p className="text-sm font-semibold text-emerald-800">
+YOUR FAMILY AT A GLANCE
+</p>
+
+<h2 className="mt-2 text-2xl font-bold">
+Welcome to your family home
+</h2>
+
+<p className="mt-2 max-w-2xl text-sm leading-7 text-gray-600">
+Bring your family together and preserve the
+stories, relationships and moments that matter.
+</p>
+
+<div className="mt-7 grid gap-5 md:grid-cols-2">
+<button
+type="button"
+onClick={() => changeSection("space")}
+className="group rounded-3xl border border-emerald-200 bg-white p-7 text-left shadow-sm transition hover:-translate-y-1 hover:shadow-md"
+>
+<div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-800">
+<TreeDeciduous size={30} />
+</div>
+
+<h3 className="mt-5 text-xl font-bold">
+Family Space
+</h3>
+
+<p className="mt-2 text-sm leading-7 text-gray-600">
+Discover your family members, manage
+connections and explore your family tree.
+</p>
+
+<span className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-emerald-800">
+Explore Family Space
+<ArrowRight size={17} />
+</span>
+</button>
+
+<button
+type="button"
+onClick={() => changeSection("heritage")}
+className="group rounded-3xl border border-amber-200 bg-white p-7 text-left shadow-sm transition hover:-translate-y-1 hover:shadow-md"
+>
+<div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-50 text-amber-800">
+<Heart size={29} />
+</div>
+
+<h3 className="mt-5 text-xl font-bold">
+Family Heritage
+</h3>
+
+<p className="mt-2 text-sm leading-7 text-gray-600">
+Preserve photographs, videos, stories, voice
+notes and the moments your family shares.
+</p>
+
+<span className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-amber-800">
+Explore Family Heritage
+<ArrowRight size={17} />
+</span>
+</button>
+</div>
+</section>
+)}
+
+{/* Family Space */}
+
+{activeSection === "space" && (
+<section className="mt-9">
+<p className="text-sm font-semibold text-emerald-800">
+YOUR PEOPLE AND CONNECTIONS
+</p>
+
+<h2 className="mt-2 text-2xl font-bold">
+Family Space
+</h2>
+
+<p className="mt-2 text-sm leading-7 text-gray-600">
+This is where your family comes together. Manage
+members, understand relationships and explore
+generations.
+</p>
+
+<div className="mt-7 grid gap-5 sm:grid-cols-2">
+{familySpaceFeatures.map((feature) => {
+const Icon = feature.icon;
+
+return (
+<Link
+key={feature.title}
+href={`${feature.path}?family_id=${family.id}`}
+className="group rounded-3xl border border-black/10 bg-white p-7 shadow-sm transition hover:-translate-y-1 hover:shadow-md"
+>
+<div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-800">
+<Icon size={29} />
+</div>
+
+<h3 className="mt-5 text-xl font-bold">
+{feature.title}
+</h3>
+
+<p className="mt-2 text-sm leading-7 text-gray-600">
+{feature.description}
+</p>
+
+<span className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-emerald-800">
+Open feature
+<ArrowRight size={17} />
+</span>
+</Link>
+);
+})}
+</div>
+
+{/* Invitation Section */}
+
+<div className="mt-8 rounded-3xl border border-black/10 bg-white p-6 shadow-sm sm:p-8">
+<div className="flex items-center gap-3">
+<div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-50 text-emerald-800">
+<UserPlus size={24} />
+</div>
+
+<div>
+<h3 className="text-xl font-bold">
+Invite Family Members
+</h3>
+
+<p className="mt-1 text-sm text-gray-600">
+Invite people directly from your existing
+family tree.
+</p>
+</div>
+</div>
+
+{!canInvite ? (
+<div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+<ShieldCheck
+className="mr-2 inline"
+size={18}
+/>
+Only family owners and admins can generate
+invitations.
+</div>
+) : (
+<div className="mt-7 space-y-5">
+{relatives.length === 0 && (
+<div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
+No family-tree people have been added yet.
+Add your relatives to the Family Tree first.
+</div>
+)}
+
+{relatives.map((relative) => {
+const link =
+invitationLinks[relative.id];
+
+const isInviting =
+invitingId === relative.id;
+
+const isConnected =
+Boolean(relative.profile_id);
+
+return (
+<div
+key={relative.id}
+className="rounded-2xl border border-gray-200 bg-white p-5"
+>
+<div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+<div>
+<h4 className="text-lg font-bold text-gray-900">
+{relative.full_name}
+</h4>
+
+<p className="mt-1 text-sm text-gray-500">
+{relative.relationship ||
+"Family member"}
+</p>
+</div>
+
+{isConnected ? (
+<span className="inline-flex items-center gap-2 rounded-full bg-emerald-100 px-4 py-2 text-sm font-semibold text-emerald-800">
+<Check size={16} />
+Already Connected
+</span>
+) : (
+<span className="inline-flex items-center gap-2 rounded-full bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-800">
+<UserPlus size={15} />
+Not connected yet
+</span>
+)}
+</div>
+
+{!isConnected && (
+<>
+<div className="mt-5">
+<label
+htmlFor={`email-${relative.id}`}
+className="mb-2 block text-sm font-semibold text-gray-700"
+>
+Email address (optional)
+</label>
+
+<input
+id={`email-${relative.id}`}
+type="email"
+value={
+emailByRelative[relative.id] || ""
+}
+onChange={(event) =>
+updateRelativeEmail(
+relative.id,
+event.target.value
+)
+}
+placeholder="Leave empty if they don't have an email"
+className="w-full rounded-xl border border-gray-200 px-4 py-3 outline-none focus:border-emerald-700 focus:ring-2 focus:ring-emerald-100"
+/>
+
+<p className="mt-2 text-xs text-gray-500">
+You can generate a link without
+entering an email address.
+</p>
+</div>
+
+<button
+type="button"
+onClick={() =>
+sendInvitation(relative)
+}
+disabled={isInviting}
+className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-[#17352b] px-6 py-3 font-semibold text-white transition hover:bg-[#21483b] disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+>
+{isInviting ? (
+<Loader2
+size={18}
+className="animate-spin"
+/>
+) : (
+<Mail size={18} />
+)}
+
+{isInviting
+? "Generating invitation..."
+: `Invite ${relative.full_name}`}
+</button>
+</>
+)}
+
+{messages[relative.id] && (
+<div className="mt-4 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">
+{messages[relative.id]}
+</div>
+)}
+
+{link && (
+<div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+<div className="flex items-center gap-2 font-semibold text-emerald-900">
+<Check size={19} />
+Invitation link created!
+</div>
+
+<input
+readOnly
+value={link}
+onFocus={(event) =>
+event.target.select()
+}
+className="mt-4 w-full rounded-lg border border-emerald-200 bg-white px-3 py-3 text-sm"
+/>
+
+<div className="mt-4 flex flex-wrap gap-3">
+<button
+type="button"
+onClick={() =>
+copyInvitationLink(relative.id)
+}
+className="flex items-center gap-2 rounded-xl bg-emerald-800 px-5 py-3 text-sm font-semibold text-white"
+>
+{copiedId === relative.id ? (
+<Check size={17} />
+) : (
+<Copy size={17} />
+)}
+
+{copiedId === relative.id
+? "Copied"
+: "Copy Link"}
+</button>
+
+<button
+type="button"
+onClick={() =>
+shareInvitationLink(relative)
+}
+className="flex items-center gap-2 rounded-xl border border-emerald-300 bg-white px-5 py-3 text-sm font-semibold text-emerald-800"
+>
+<Share2 size={17} />
+Share Invitation
+</button>
+</div>
+</div>
+)}
+</div>
+);
+})}
+</div>
+)}
+
+{globalMessage && (
+<div
+className={`mt-4 rounded-xl p-4 text-sm ${
+globalMessageIsError
+? "border border-red-200 bg-red-50 text-red-700"
+: "border border-emerald-200 bg-emerald-50 text-emerald-800"
+}`}
+>
+{globalMessage}
+</div>
+)}
+</div>
+
+{/* Member Count */}
+
+<div className="mt-6 rounded-2xl border border-black/10 bg-white p-6">
+<div className="flex items-center justify-between gap-4">
+<div>
+<h3 className="font-bold">
+Your Family Members
+</h3>
+
+<p className="mt-1 text-sm text-gray-500">
+Active accounts in this family.
+</p>
+</div>
+
+<Link
+href={`/dashboard/family-members?family_id=${family.id}`}
+className="text-sm font-semibold text-emerald-800"
+>
+Manage Members →
+</Link>
+</div>
+
+<p className="mt-5 text-3xl font-bold">
+{members.length}
+</p>
+
+<p className="text-sm text-gray-500">
+Active family accounts
+</p>
+</div>
+</section>
+)}
+
+{/* Family Heritage */}
+
+{activeSection === "heritage" && (
+<section className="mt-9">
+<p className="text-sm font-semibold text-amber-800">
+YOUR FAMILY'S HISTORY AND MEMORIES
+</p>
+
+<h2 className="mt-2 text-2xl font-bold">
+Family Heritage
+</h2>
+
+<p className="mt-2 max-w-2xl text-sm leading-7 text-gray-600">
+A place to preserve the stories, photographs,
+voices, messages and important moments that
+future generations will treasure.
+</p>
+
+<div className="mt-7 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+{heritageFeatures.map((feature) => {
+const Icon = feature.icon;
+
+const cardContent = (
+<>
+<div className="flex h-12 w-12 items-center justify-center rounded-xl bg-amber-50 text-amber-800">
+<Icon size={25} />
+</div>
+
+<div className="mt-5 flex items-center justify-between gap-2">
+<h3 className="font-bold">
+{feature.title}
+</h3>
+
+{feature.available ? (
+<ArrowRight
+size={17}
+className="text-amber-800"
+/>
+) : (
+<span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-500">
+Coming soon
+</span>
+)}
+</div>
+
+<p className="mt-2 text-sm leading-6 text-gray-600">
+{feature.description}
+</p>
+</>
+);
+
+return feature.available ? (
+<Link
+key={feature.title}
+href={`${feature.path}?family_id=${family.id}`}
+className="rounded-2xl border border-black/10 bg-white p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-md"
+>
+{cardContent}
+</Link>
+) : (
+<div
+key={feature.title}
+className="rounded-2xl border border-black/10 bg-white p-6 opacity-75"
+>
+{cardContent}
+</div>
+);
+})}
+</div>
+
+<div className="mt-8 rounded-2xl border border-amber-200 bg-amber-50 p-5">
+<div className="flex items-start gap-3">
+<Heart
+className="mt-1 shrink-0 text-amber-800"
+size={21}
+/>
+
+<div>
+<h3 className="font-bold text-amber-950">
+Every memory matters
+</h3>
+
+<p className="mt-1 text-sm leading-6 text-amber-900/80">
+Your family's heritage is more than
+photographs. It is the voices, messages,
+stories and experiences that make your
+family what it is.
+</p>
+</div>
+</div>
+</div>
+</section>
+)}
+
+{/* Footer */}
+
+<footer className="mt-12 flex flex-wrap gap-5 border-t border-gray-200 pt-6">
+<Link
+href="/dashboard/settings"
+className="text-sm font-semibold text-gray-600 hover:text-emerald-800"
+>
+Account Settings
+</Link>
+
+<Link
+href="/dashboard/notifications"
+className="text-sm font-semibold text-gray-600 hover:text-emerald-800"
+>
+Notifications
+</Link>
+</footer>
+</div>
+</main>
+);
 }

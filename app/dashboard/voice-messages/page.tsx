@@ -1,18 +1,25 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { supabase } from "@/app/lib/supabase";
 
 type VoiceMessage = {
-id: string;
+id: number;
 title: string;
-description: string;
-audioUrl: string;
-duration: number;
-createdAt: string;
+description: string | null;
+storage_path: string;
+duration_seconds: number;
+created_at: string;
+uploaded_by: string;
+audioUrl?: string;
 };
 
 export default function VoiceMessagesPage() {
+const searchParams = useSearchParams();
+const familyId = searchParams.get("family_id");
+
 const [messages, setMessages] = useState<VoiceMessage[]>([]);
 const [title, setTitle] = useState("");
 const [description, setDescription] = useState("");
@@ -24,27 +31,15 @@ const [elapsed, setElapsed] = useState(0);
 const [error, setError] = useState("");
 const [notice, setNotice] = useState("");
 const [loading, setLoading] = useState(false);
+const [pageLoading, setPageLoading] = useState(true);
+const [userId, setUserId] = useState("");
+const [profileId, setProfileId] = useState<number | null>(null);
 
 const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 const streamRef = useRef<MediaStream | null>(null);
 const chunksRef = useRef<Blob[]>([]);
 const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 const startTimeRef = useRef<number>(0);
-const fileInputRef = useRef<HTMLInputElement>(null);
-
-useEffect(() => {
-return () => {
-if (timerRef.current) clearInterval(timerRef.current);
-
-streamRef.current?.getTracks().forEach((track) => track.stop());
-
-if (audioPreview) URL.revokeObjectURL(audioPreview);
-
-messages.forEach((message) => URL.revokeObjectURL(message.audioUrl));
-};
-// Cleanup when the page unmounts.
-// eslint-disable-next-line react-hooks/exhaustive-deps
-}, []);
 
 function formatDuration(seconds: number) {
 const minutes = Math.floor(seconds / 60);
@@ -67,6 +62,106 @@ timerRef.current = null;
 }
 }
 
+const loadMessages = useCallback(async () => {
+if (!familyId) {
+setError("Family ID is missing. Open Voice Messages from your family workspace.");
+setPageLoading(false);
+return;
+}
+
+setPageLoading(true);
+setError("");
+
+try {
+const {
+data: { user },
+error: authError,
+} = await supabase.auth.getUser();
+
+if (authError || !user) {
+throw new Error("Please log in to access voice messages.");
+}
+
+setUserId(user.id);
+
+const { data: profile, error: profileError } = await supabase
+.from("profiles")
+.select("id")
+.eq("user_id", user.id)
+.single();
+
+if (profileError || !profile) {
+throw new Error("Your user profile could not be found.");
+}
+
+setProfileId(profile.id);
+
+const { data: membership, error: membershipError } = await supabase
+.from("family_members")
+.select("family_id")
+.eq("profile_id", profile.id)
+.eq("family_id", Number(familyId))
+.eq("status", "active")
+.eq("is_active", true)
+.maybeSingle();
+
+if (membershipError || !membership) {
+throw new Error("You are not an active member of this family.");
+}
+
+const { data, error: messagesError } = await supabase
+.from("voice_messages")
+.select("*")
+.eq("family_id", Number(familyId))
+.order("created_at", { ascending: false });
+
+if (messagesError) throw messagesError;
+
+const messagesWithUrls = await Promise.all(
+(data || []).map(async (message: VoiceMessage) => {
+const { data: signedData, error: signedError } =
+await supabase.storage
+.from("voice-messages")
+.createSignedUrl(message.storage_path, 3600);
+
+if (signedError) {
+console.error("Audio URL error:", signedError);
+}
+
+return {
+...message,
+audioUrl: signedData?.signedUrl || "",
+};
+})
+);
+
+setMessages(messagesWithUrls);
+} catch (err) {
+setError(
+err instanceof Error
+? err.message
+: "Unable to load voice messages."
+);
+} finally {
+setPageLoading(false);
+}
+}, [familyId]);
+
+useEffect(() => {
+loadMessages();
+}, [loadMessages]);
+
+useEffect(() => {
+return () => {
+clearTimer();
+releaseMicrophone();
+
+if (audioPreview) {
+URL.revokeObjectURL(audioPreview);
+}
+};
+}, [audioPreview]);
+
 async function startRecording() {
 setError("");
 setNotice("");
@@ -74,13 +169,10 @@ setRecordedBlob(null);
 setElapsed(0);
 
 if (
-typeof navigator === "undefined" ||
 !navigator.mediaDevices?.getUserMedia ||
 typeof MediaRecorder === "undefined"
 ) {
-setError(
-"Voice recording is not supported by this browser. Try an updated browser on HTTPS or localhost."
-);
+setError("Recording is not supported by this browser.");
 return;
 }
 
@@ -121,21 +213,26 @@ type: recorder.mimeType || "audio/webm",
 });
 
 setRecordedBlob(blob);
+
 setDuration(
-Math.max(1, Math.round((Date.now() - startTimeRef.current) / 1000))
+Math.max(
+1,
+Math.round((Date.now() - startTimeRef.current) / 1000)
+)
 );
 
 setAudioPreview(URL.createObjectURL(blob));
+
 releaseMicrophone();
-setRecording(false);
 clearTimer();
+setRecording(false);
 };
 
 recorder.onerror = () => {
 setError("Recording failed. Please try again.");
-setRecording(false);
 releaseMicrophone();
 clearTimer();
+setRecording(false);
 };
 
 recorder.start();
@@ -148,7 +245,7 @@ Math.floor((Date.now() - startTimeRef.current) / 1000)
 }, 1000);
 } catch {
 setError(
-"We couldn't access your microphone. Allow microphone permission in your browser settings and try again."
+"Microphone access was denied. Please allow microphone permission."
 );
 }
 }
@@ -158,17 +255,17 @@ const recorder = mediaRecorderRef.current;
 
 if (recorder && recorder.state !== "inactive") {
 recorder.stop();
-} else {
-setRecording(false);
-releaseMicrophone();
-clearTimer();
 }
 }
 
 function discardRecording() {
-if (recording) stopRecording();
+if (recording) {
+stopRecording();
+}
 
-if (audioPreview) URL.revokeObjectURL(audioPreview);
+if (audioPreview) {
+URL.revokeObjectURL(audioPreview);
+}
 
 setAudioPreview("");
 setRecordedBlob(null);
@@ -176,53 +273,8 @@ setDuration(0);
 setElapsed(0);
 setTitle("");
 setDescription("");
-setError("");
 setNotice("Recording discarded.");
-}
-
-function saveRecording() {
-if (!recordedBlob) {
-setError("Please record or upload an audio message first.");
-return;
-}
-
-if (!title.trim()) {
-setError("Please enter a title for your voice message.");
-return;
-}
-
-setLoading(true);
 setError("");
-
-try {
-const message: VoiceMessage = {
-id: crypto.randomUUID(),
-title: title.trim(),
-description: description.trim(),
-audioUrl: URL.createObjectURL(recordedBlob),
-duration,
-createdAt: new Date().toISOString(),
-};
-
-setMessages((current) => [...current, message]);
-
-if (audioPreview) URL.revokeObjectURL(audioPreview);
-
-setAudioPreview("");
-setRecordedBlob(null);
-setTitle("");
-setDescription("");
-setDuration(0);
-setElapsed(0);
-
-setNotice(
-"Voice message added to this session. Upload it to secure storage to keep it across devices."
-);
-} catch {
-setError("We couldn't save this recording. Please try again.");
-} finally {
-setLoading(false);
-}
 }
 
 function uploadAudio(event: React.ChangeEvent<HTMLInputElement>) {
@@ -240,43 +292,166 @@ return;
 }
 
 if (file.size > 25 * 1024 * 1024) {
-setError("Please choose an audio file smaller than 25 MB.");
+setError("Please select an audio file smaller than 25 MB.");
 event.target.value = "";
 return;
 }
 
-if (audioPreview) URL.revokeObjectURL(audioPreview);
+if (audioPreview) {
+URL.revokeObjectURL(audioPreview);
+}
 
-const url = URL.createObjectURL(file);
-
-setAudioPreview(url);
 setRecordedBlob(file);
+setAudioPreview(URL.createObjectURL(file));
 setDuration(0);
+
 setTitle((current) =>
 current || file.name.replace(/\.[^/.]+$/, "")
 );
 
-setNotice("Audio selected. Listen to it before saving.");
-
+setNotice("Audio selected. Listen before saving.");
 event.target.value = "";
 }
 
-function deleteMessage(id: string) {
+async function saveRecording() {
+if (!recordedBlob) {
+setError("Please record or upload an audio message first.");
+return;
+}
+
+if (!title.trim()) {
+setError("Please enter a title for your voice message.");
+return;
+}
+
+if (!familyId || !userId || !profileId) {
+setError("Your family or profile information is missing.");
+return;
+}
+
+setLoading(true);
+setError("");
+setNotice("");
+
+let storagePath = "";
+
+try {
+const mimeType = (
+recordedBlob.type || "audio/webm"
+).split(";")[0];
+
+const extension =
+mimeType === "audio/mp4"
+? "mp4"
+: mimeType === "audio/mpeg"
+? "mp3"
+: mimeType === "audio/ogg"
+? "ogg"
+: mimeType === "audio/wav"
+? "wav"
+: mimeType === "audio/aac"
+? "aac"
+: "webm";
+
+const fileName = `${crypto.randomUUID()}.${extension}`;
+
+storagePath = `${familyId}/${userId}/${fileName}`;
+
+const { error: uploadError } = await supabase.storage
+.from("voice-messages")
+.upload(storagePath, recordedBlob, {
+contentType: mimeType,
+upsert: false,
+});
+
+if (uploadError) throw uploadError;
+
+const { error: insertError } = await supabase
+.from("voice_messages")
+.insert({
+family_id: Number(familyId),
+profile_id: profileId,
+uploaded_by: userId,
+title: title.trim(),
+description: description.trim() || null,
+storage_path: storagePath,
+duration_seconds: duration,
+mime_type: mimeType,
+file_size: recordedBlob.size,
+});
+
+if (insertError) {
+await supabase.storage
+.from("voice-messages")
+.remove([storagePath]);
+
+throw insertError;
+}
+
+if (audioPreview) {
+URL.revokeObjectURL(audioPreview);
+}
+
+setAudioPreview("");
+setRecordedBlob(null);
+setTitle("");
+setDescription("");
+setDuration(0);
+setElapsed(0);
+
+setNotice("Your voice message has been saved successfully.");
+
+await loadMessages();
+} catch (err) {
+setError(
+err instanceof Error
+? err.message
+: "We couldn't save your voice message."
+);
+} finally {
+setLoading(false);
+}
+}
+
+async function deleteMessage(message: VoiceMessage) {
 const confirmed = window.confirm(
-"Delete this voice message from the current session?"
+"Are you sure you want to permanently delete this voice message?"
 );
 
 if (!confirmed) return;
 
-setMessages((current) => {
-const message = current.find((item) => item.id === id);
+setError("");
+setNotice("");
 
-if (message) URL.revokeObjectURL(message.audioUrl);
+try {
+const { error: databaseError } = await supabase
+.from("voice_messages")
+.delete()
+.eq("id", message.id)
+.eq("uploaded_by", userId);
 
-return current.filter((item) => item.id !== id);
-});
+if (databaseError) throw databaseError;
 
-setNotice("Voice message removed from this session.");
+const { error: storageError } = await supabase.storage
+.from("voice-messages")
+.remove([message.storage_path]);
+
+if (storageError) {
+setNotice(
+"The message record was deleted, but its audio file could not be removed."
+);
+} else {
+setNotice("Voice message permanently deleted.");
+}
+
+await loadMessages();
+} catch (err) {
+setError(
+err instanceof Error
+? err.message
+: "Unable to delete this voice message."
+);
+}
 }
 
 return (
@@ -300,8 +475,7 @@ Voice Messages 🎙️
 
 <p className="mt-3 max-w-2xl leading-7 text-slate-600">
 Preserve the voices, stories, advice, laughter, and memories
-of the people who matter most. Their voices can become part
-of your family history.
+of the people who matter most.
 </p>
 </header>
 
@@ -327,12 +501,12 @@ className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm t
 <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
 <div className="mb-6">
 <div className="mb-3 text-4xl">🎧</div>
-
-<h2 className="text-xl font-bold">Record a Voice Message</h2>
-
+<h2 className="text-xl font-bold">
+Record a Voice Message
+</h2>
 <p className="mt-2 text-sm leading-6 text-slate-500">
-Record a personal message, a family story, a birthday
-greeting, or advice for future generations.
+Record a family story, birthday greeting, or advice
+for future generations.
 </p>
 </div>
 
@@ -359,7 +533,7 @@ recording
 : "Ready to record"}
 </p>
 
-<div className="mt-6 flex flex-wrap justify-center gap-3">
+<div className="mt-6 flex justify-center gap-3">
 {!recording ? (
 <button
 type="button"
@@ -379,35 +553,34 @@ className="rounded-xl bg-red-600 px-5 py-3 font-semibold text-white hover:bg-red
 )}
 </div>
 
-<p className="mt-4 text-xs leading-5 text-slate-500">
-Your browser will ask permission to use your microphone.
+<p className="mt-4 text-xs text-slate-500">
+Allow microphone permission when requested.
 </p>
 </div>
 
 <div className="mb-6">
-<div className="mb-3 flex items-center justify-between gap-3">
-<h3 className="font-semibold">Or upload an audio file</h3>
-
-<span className="text-xs text-slate-500">
-Maximum 25 MB
-</span>
-</div>
+<h3 className="mb-3 font-semibold">
+Or upload an audio file
+</h3>
 
 <input
-ref={fileInputRef}
 type="file"
 accept="audio/*"
 onChange={uploadAudio}
 className="block w-full cursor-pointer rounded-xl border border-slate-300 p-3 text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-emerald-50 file:px-4 file:py-2 file:font-semibold file:text-emerald-800"
 />
+<p className="mt-2 text-xs text-slate-500">
+Maximum file size: 25 MB.
+</p>
 </div>
 
 {audioPreview && (
 <div className="mb-6 rounded-xl border border-emerald-200 p-4">
-<h3 className="mb-3 font-semibold">Listen before saving</h3>
+<h3 className="mb-3 font-semibold">
+Listen before saving
+</h3>
 
 <audio
-key={audioPreview}
 controls
 src={audioPreview}
 className="w-full"
@@ -435,7 +608,7 @@ Message title *
 <input
 id="voice-title"
 value={title}
-onChange={(e) => setTitle(e.target.value)}
+onChange={(event) => setTitle(event.target.value)}
 placeholder="e.g. Grandpa's childhood story"
 className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-emerald-600"
 />
@@ -453,7 +626,9 @@ Description
 id="voice-description"
 rows={3}
 value={description}
-onChange={(e) => setDescription(e.target.value)}
+onChange={(event) =>
+setDescription(event.target.value)
+}
 placeholder="What is this message about?"
 className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-emerald-600"
 />
@@ -472,26 +647,33 @@ className="w-full rounded-xl bg-emerald-700 px-5 py-3 font-semibold text-white h
 
 <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
 <div className="mb-6">
-<h2 className="text-xl font-bold">Your Voice Collection</h2>
+<h2 className="text-xl font-bold">
+Your Voice Collection
+</h2>
 
 <p className="mt-2 text-sm leading-6 text-slate-500">
-Recordings added during this session will appear here.
+Family recordings saved securely in your workspace.
 </p>
 </div>
 
 <div className="mb-6 rounded-xl bg-emerald-50 p-4">
 <p className="text-sm text-emerald-900">
 <strong>{messages.length}</strong>{" "}
-{messages.length === 1 ? "message" : "messages"} in this
-session
+{messages.length === 1 ? "message" : "messages"} saved
 </p>
 </div>
 
-{messages.length === 0 ? (
+{pageLoading ? (
+<p className="py-10 text-center text-sm text-slate-500">
+Loading your voice collection...
+</p>
+) : messages.length === 0 ? (
 <div className="rounded-2xl border border-dashed border-slate-300 px-5 py-12 text-center">
 <div className="mb-4 text-5xl">🎙️</div>
 
-<h3 className="font-bold">No voice messages yet</h3>
+<h3 className="font-bold">
+No voice messages yet
+</h3>
 
 <p className="mt-2 text-sm leading-6 text-slate-500">
 Your first recording could preserve a memory your
@@ -512,17 +694,21 @@ className="rounded-xl border border-slate-200 p-4"
 </h3>
 
 <p className="mt-1 text-xs text-slate-500">
-{new Date(message.createdAt).toLocaleString()}
+{new Date(
+message.created_at
+).toLocaleString()}
 </p>
 </div>
 
+{message.uploaded_by === userId && (
 <button
 type="button"
-onClick={() => deleteMessage(message.id)}
+onClick={() => deleteMessage(message)}
 className="shrink-0 text-sm font-medium text-red-700 hover:underline"
 >
 Delete
 </button>
+)}
 </div>
 
 {message.description && (
@@ -531,11 +717,22 @@ Delete
 </p>
 )}
 
+{message.audioUrl ? (
 <audio
 controls
 src={message.audioUrl}
 className="mt-4 w-full"
 />
+) : (
+<p className="mt-4 text-sm text-red-600">
+Audio could not be loaded. Try refreshing.
+</p>
+)}
+
+<p className="mt-2 text-xs text-slate-400">
+Duration:{" "}
+{formatDuration(message.duration_seconds || 0)}
+</p>
 </article>
 ))}
 </div>
@@ -543,18 +740,15 @@ className="mt-4 w-full"
 </section>
 </div>
 
-<div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-5">
-<h2 className="font-bold text-amber-950">
-Important: Protecting family memories
+<div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
+<h2 className="font-bold text-emerald-950">
+Preserving family voices
 </h2>
 
-<p className="mt-2 text-sm leading-6 text-amber-900">
-This is the initial recording interface. Messages currently
-remain in browser memory and will not survive a page refresh.
-The next stage is connecting Supabase Storage and the database
-so recordings can be stored securely and associated with the
-correct family. Family access controls must be configured
-before sharing private recordings.
+<p className="mt-2 text-sm leading-6 text-emerald-900">
+Your recordings are stored in private family storage.
+Only authenticated members with active family membership
+can access the collection.
 </p>
 </div>
 

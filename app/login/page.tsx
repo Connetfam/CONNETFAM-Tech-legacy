@@ -55,7 +55,9 @@ return (
 CONNETFAM
 </p>
 
-<h1 className="mb-2 text-3xl font-bold">Welcome back</h1>
+<h1 className="mb-2 text-3xl font-bold">
+Welcome back
+</h1>
 
 <p className="mb-8 text-gray-600">
 Log in to continue preserving your family&apos;s story.
@@ -66,6 +68,7 @@ Log in to continue preserving your family&apos;s story.
 <label htmlFor="email" className="mb-2 block font-medium">
 Email
 </label>
+
 <input
 id="email"
 type="email"
@@ -82,6 +85,7 @@ placeholder="you@example.com"
 <label htmlFor="password" className="mb-2 block font-medium">
 Password
 </label>
+
 <input
 id="password"
 type="password"
@@ -92,6 +96,15 @@ required
 className="w-full rounded-xl border border-black/15 px-4 py-3 outline-none focus:border-emerald-700"
 placeholder="Your password"
 />
+
+<div className="mt-3 flex justify-end">
+<Link
+href="/forgot-password"
+className="text-sm font-semibold text-emerald-700 hover:text-emerald-900 hover:underline"
+>
+Forgot password?
+</Link>
+</div>
 </div>
 
 <button
@@ -103,7 +116,11 @@ className="w-full rounded-xl bg-[#17352b] px-4 py-3 font-semibold text-white hov
 </button>
 
 {message && (
-<p role="status" aria-live="polite" className="text-sm text-red-700">
+<p
+role="status"
+aria-live="polite"
+className="text-sm text-red-700"
+>
 {message}
 </p>
 )}

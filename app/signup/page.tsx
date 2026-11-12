@@ -28,13 +28,21 @@ async function handleSignup(event: FormEvent<HTMLFormElement>) {
 event.preventDefault();
 setMessage("");
 
-if (password.length < 6) {
-setMessage("Your password must contain at least 6 characters.");
+const cleanName = fullName.trim();
+const cleanEmail = email.trim().toLowerCase();
+
+if (!cleanName) {
+setMessage("Please enter your full name.");
+return;
+}
+
+if (password.length < 8) {
+setMessage("Your password must contain at least 8 characters.");
 return;
 }
 
 if (password !== confirmPassword) {
-setMessage("Your passwords do not match. Please try again.");
+setMessage("Your passwords do not match.");
 return;
 }
 
@@ -42,16 +50,12 @@ setLoading(true);
 
 try {
 const { data, error } = await supabase.auth.signUp({
-email: email.trim(),
-password: password,
+email: cleanEmail,
+password,
 options: {
 data: {
-full_name: fullName.trim(),
+full_name: cleanName,
 },
-emailRedirectTo:
-window.location.origin +
-"/auth/callback?next=" +
-encodeURIComponent(safeRedirect),
 },
 });
 
@@ -65,25 +69,28 @@ window.location.assign(safeRedirect);
 return;
 }
 
-setMessage(
-"Your account request was successful. Check your email to verify your address before continuing."
-);
+const verificationUrl =
+"/verify-email?email=" +
+encodeURIComponent(cleanEmail) +
+"&redirect=" +
+encodeURIComponent(safeRedirect);
+
+window.location.assign(verificationUrl);
 } catch (error) {
 console.error("Signup error:", error);
-setMessage("Something went wrong. Please try again.");
+setMessage("Unable to create your account. Please try again.");
 } finally {
 setLoading(false);
 }
 }
 
-const loginUrl =
-"/login?redirect=" + encodeURIComponent(safeRedirect);
+const loginUrl = "/login?redirect=" + encodeURIComponent(safeRedirect);
 
 return (
 <main className="flex min-h-screen items-center justify-center bg-[#f7f5ef] px-5 py-10 text-[#1f2937]">
 <section className="w-full max-w-md rounded-3xl border border-black/10 bg-white p-8 shadow-sm">
 <p className="mb-4 text-xs font-semibold uppercase tracking-[0.3em] text-emerald-700">
-CONNETFAM
+LEGACY FAMILY
 </p>
 
 <h1 className="mb-2 text-3xl font-bold">
@@ -91,16 +98,13 @@ Create Your Account
 </h1>
 
 <p className="mb-8 text-gray-600">
-Join your family and start preserving your family&apos;s story for
-generations.
+Join your family and start preserving your family&apos;s
+stories, memories and history for generations.
 </p>
 
 <form onSubmit={handleSignup} className="space-y-5">
 <div>
-<label
-htmlFor="fullName"
-className="mb-2 block font-medium"
->
+<label htmlFor="fullName" className="mb-2 block font-medium">
 Full name
 </label>
 
@@ -117,10 +121,7 @@ className="w-full rounded-xl border border-black/15 px-4 py-3 outline-none focus
 </div>
 
 <div>
-<label
-htmlFor="email"
-className="mb-2 block font-medium"
->
+<label htmlFor="email" className="mb-2 block font-medium">
 Email address
 </label>
 
@@ -137,10 +138,7 @@ className="w-full rounded-xl border border-black/15 px-4 py-3 outline-none focus
 </div>
 
 <div>
-<label
-htmlFor="password"
-className="mb-2 block font-medium"
->
+<label htmlFor="password" className="mb-2 block font-medium">
 Password
 </label>
 
@@ -150,8 +148,8 @@ type="password"
 value={password}
 onChange={(event) => setPassword(event.target.value)}
 autoComplete="new-password"
-placeholder="At least 6 characters"
-minLength={6}
+placeholder="At least 8 characters"
+minLength={8}
 required
 className="w-full rounded-xl border border-black/15 px-4 py-3 outline-none focus:border-emerald-700"
 />
@@ -172,11 +170,21 @@ value={confirmPassword}
 onChange={(event) => setConfirmPassword(event.target.value)}
 autoComplete="new-password"
 placeholder="Enter your password again"
-minLength={6}
+minLength={8}
 required
 className="w-full rounded-xl border border-black/15 px-4 py-3 outline-none focus:border-emerald-700"
 />
 </div>
+
+{message && (
+<p
+role="alert"
+aria-live="polite"
+className="rounded-xl bg-red-50 p-3 text-sm text-red-700"
+>
+{message}
+</p>
+)}
 
 <button
 type="submit"
@@ -185,16 +193,6 @@ className="w-full rounded-xl bg-[#17352b] px-4 py-3 font-semibold text-white hov
 >
 {loading ? "Creating account..." : "Create Account"}
 </button>
-
-{message && (
-<p
-role="status"
-aria-live="polite"
-className="rounded-xl bg-gray-50 p-3 text-sm text-gray-700"
->
-{message}
-</p>
-)}
 </form>
 
 <p className="mt-6 text-center text-sm text-gray-600">
@@ -208,8 +206,7 @@ Log in
 </p>
 
 <p className="mt-4 text-center text-xs text-gray-500">
-By creating an account, you can begin preserving your family&apos;s
-memories on ConnetFam.
+Your family&apos;s memories deserve to last for generations.
 </p>
 </section>
 </main>
