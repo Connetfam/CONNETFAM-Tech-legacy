@@ -1,4 +1,4 @@
-"use client";
+use client";
 
 import { Suspense, useState } from "react";
 import type { FormEvent } from "react";
@@ -49,6 +49,13 @@ return;
 setLoading(true);
 
 try {
+const callbackUrl = new URL(
+"/auth/callback",
+window.location.origin
+);
+
+callbackUrl.searchParams.set("next", safeRedirect);
+
 const { data, error } = await supabase.auth.signUp({
 email: cleanEmail,
 password,
@@ -56,6 +63,7 @@ options: {
 data: {
 full_name: cleanName,
 },
+emailRedirectTo: callbackUrl.toString(),
 },
 });
 
@@ -69,13 +77,15 @@ window.location.assign(safeRedirect);
 return;
 }
 
-const verificationUrl =
-"/verify-email?email=" +
-encodeURIComponent(cleanEmail) +
-"&redirect=" +
-encodeURIComponent(safeRedirect);
+const verificationUrl = new URL(
+"/verify-email",
+window.location.origin
+);
 
-window.location.assign(verificationUrl);
+verificationUrl.searchParams.set("email", cleanEmail);
+verificationUrl.searchParams.set("redirect", safeRedirect);
+
+window.location.assign(verificationUrl.toString());
 } catch (error) {
 console.error("Signup error:", error);
 setMessage("Unable to create your account. Please try again.");
@@ -84,7 +94,8 @@ setLoading(false);
 }
 }
 
-const loginUrl = "/login?redirect=" + encodeURIComponent(safeRedirect);
+const loginUrl =
+"/login?redirect=" + encodeURIComponent(safeRedirect);
 
 return (
 <main className="flex min-h-screen items-center justify-center bg-[#f7f5ef] px-5 py-10 text-[#1f2937]">
