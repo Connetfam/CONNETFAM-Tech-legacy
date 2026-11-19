@@ -128,17 +128,18 @@ let relatives: any[] = [];
 if (profileIds.length > 0) {
 const { data, error } = await admin
 .from("profiles")
-.select("id, user_id, full_name, avatar_url")
+.select("id, user_id, full_name:display_name, avatar_url")
 .in("id", profileIds);
 
 if (error) {
-// Some profiles schemas may not contain avatar_url.
+// Fallback if avatar_url is unavailable.
 const fallback = await admin
 .from("profiles")
-.select("id, user_id, full_name")
+.select("id, user_id, full_name:display_name")
 .in("id", profileIds);
 
 if (fallback.error) throw fallback.error;
+
 profiles = fallback.data || [];
 } else {
 profiles = data || [];
@@ -153,15 +154,18 @@ const { data, error } = await admin
 .eq("family_id", familyId);
 
 if (error) throw error;
+
 relatives = data || [];
 }
 
 const enrichedRequests = (requests || []).map((item) => ({
 ...item,
-profile: profiles.find(
+profile:
+profiles.find(
 (person) => person.id === item.profile_id
 ) || null,
-relative: relatives.find(
+relative:
+relatives.find(
 (person) => person.id === item.relative_id
 ) || null,
 }));
